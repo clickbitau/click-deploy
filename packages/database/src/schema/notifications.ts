@@ -9,6 +9,7 @@ import {
   uuid,
   varchar,
   pgEnum,
+  index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations, users } from './auth';
@@ -20,6 +21,9 @@ export const notificationTypeEnum = pgEnum('notification_type', [
 export const notificationEventEnum = pgEnum('notification_event', [
   'deploy_success', 'deploy_fail', 'service_down', 'service_up',
   'node_offline', 'node_online', 'build_fail', 'certificate_expiring',
+]);
+export const inAppNotificationLevelEnum = pgEnum('in_app_notification_level', [
+  'info', 'success', 'warning', 'error',
 ]);
 
 // ── Notification Channels ──────────────────────────────────
@@ -55,6 +59,32 @@ export const auditLogs = pgTable('audit_logs', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ── In-App Notifications ───────────────────────────────────
+export const inAppNotifications = pgTable('in_app_notifications', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 200 }).notNull(),
+  message: text('message').notNull().default(''),
+  level: inAppNotificationLevelEnum('level').notNull().default('info'),
+  category: varchar('category', { length: 50 }).notNull().default('system'),
+  resourceId: uuid('resource_id'),
+  readAt: timestamp('read_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  orgIdx: index('in_app_notif_org_idx').on(table.organizationId),
+  userIdx: index('in_app_notif_user_idx').on(table.userId),
+  readIdx: index('in_app_notif_read_idx').on(table.readAt),
+}));
+
+// ── UI Events (Supabase Realtime broadcast table) ──────────
+export const uiEvents = pgTable('ui_events', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  eventType: text('event_type').notNull().default('refresh'),
+  payload: jsonb('payload').default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ── Relations ──────────────────────────────────────────────
 export const notificationChannelsRelations = relations(notificationChannels, ({ one, many }) => ({
   organization: one(organizations, {
@@ -78,6 +108,17 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   }),
   user: one(users, {
     fields: [auditLogs.userId],
+    references: [users.id],
+  }),
+}));
+
+export const inAppNotificationsRelations = relations(inAppNotifications, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [inAppNotifications.organizationId],
+    references: [organizations.id],
+  }),
+  user: one(users, {
+    fields: [inAppNotifications.userId],
     references: [users.id],
   }),
 }));

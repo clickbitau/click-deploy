@@ -15,6 +15,8 @@ import {
   StopCircle,
   Timer,
   Hash,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
@@ -42,20 +44,30 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
+const PAGE_SIZE = 10;
+
 export default function DeploymentsPage() {
-  const { data: deployments, isLoading, refetch } = trpc.deployment.listRecent.useQuery({ limit: 50 }, { retry: 1, refetchInterval: (query) => {
-    const data = query.state.data;
-    if (data?.some((d: any) => ['building', 'deploying', 'pending'].includes(d.deployStatus))) return 3000;
-    return false;
-  }});
+  const [page, setPage] = useState(0);
+  const { data, isLoading, refetch } = trpc.deployment.listRecent.useQuery(
+    { limit: PAGE_SIZE, offset: page * PAGE_SIZE },
+    { retry: 1, refetchInterval: (query) => {
+      const d = query.state.data;
+      if (d?.items?.some((dep: any) => ['building', 'deploying', 'pending'].includes(dep.deployStatus))) return 3000;
+      return false;
+    }}
+  );
+  const deployments = data?.items;
+  const total = data?.total ?? 0;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+
   const [showTrigger, setShowTrigger] = useState(false);
   const rollback = trpc.deployment.rollback.useMutation();
   const cancelDeploy = trpc.deployment.cancel.useMutation();
   const [rollingBackId, setRollingBackId] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [confirmingCancelId, setConfirmingCancelId] = useState<string | null>(null);
 
   const handleRollback = (deployId: string, serviceId: string) => {
-    if (!confirm('Roll back to this deployment? A new deployment will be created.')) return;
     setRollingBackId(deployId);
     rollback.mutate({ serviceId, targetDeploymentId: deployId }, {
       onSuccess: () => { setRollingBackId(null); refetch(); },
@@ -63,15 +75,27 @@ export default function DeploymentsPage() {
     });
   };
 
-  const handleCancel = (e: React.MouseEvent, deployId: string) => {
-    e.preventDefault(); // Prevent link navigation
+  const handleCancelClick = (e: React.MouseEvent, deployId: string) => {
+    e.preventDefault();
     e.stopPropagation();
-    if (!confirm('Cancel this deployment? Any in-progress build will be killed.')) return;
+    setConfirmingCancelId(deployId);
+  };
+
+  const handleCancelConfirm = (e: React.MouseEvent, deployId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setConfirmingCancelId(null);
     setCancellingId(deployId);
     cancelDeploy.mutate({ id: deployId }, {
       onSuccess: () => { setCancellingId(null); refetch(); },
       onError: () => setCancellingId(null),
     });
+  };
+
+  const handleCancelDismiss = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setConfirmingCancelId(null);
   };
 
   return (
@@ -107,7 +131,7 @@ export default function DeploymentsPage() {
       )}
 
       {/* Empty */}
-      {!isLoading && (!deployments || deployments.length === 0) && (
+      {!isLoading && (!deployments || deployments.length === 0) && total === 0 && (
         <div className="glass-card flex flex-col items-center justify-center py-20">
           <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-5">
             <Rocket className="w-8 h-8 text-white/20" />
@@ -126,8 +150,10 @@ export default function DeploymentsPage() {
       {/* Deployment List */}
       {!isLoading && deployments && deployments.length > 0 && (
         <div className="glass-card">
-          <div className="px-5 py-3 border-b border-white/5">
-            <p className="text-xs text-white/30">Showing {deployments.length} recent deployments</p>
+          <div className="px-5 py-3 border-b border-white/5 flex items-center justify-between">
+            <p className="text-xs text-white/30">
+              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total} deployments
+            </p>
           </div>
           <div className="divide-y divide-white/[0.03]">
             {deployments.map((deploy: any, index: number) => {
@@ -141,7 +167,7 @@ export default function DeploymentsPage() {
                   <div className="flex items-start gap-4">
                     {/* Number + Status */}
                     <div className="flex items-center gap-3 pt-0.5 shrink-0">
-                      <span className="text-xs text-white/15 font-mono w-5 text-right">{index + 1}.</span>
+                      <span className="text-xs text-white/15 font-mono w-5 text-right">{page * PAGE_SIZE + index + 1}.</span>
                       <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md border ${
                         deploy.deployStatus === 'running' ? 'bg-success-500/10 border-success-500/20 text-success-400' :
                         deploy.deployStatus === 'failed' ? 'bg-danger-500/10 border-danger-500/20 text-danger-400' :
@@ -178,9 +204,21 @@ export default function DeploymentsPage() {
                     {/* Right side: time + duration + actions */}
                     <div className="flex items-center gap-3 shrink-0">
                       {/* Cancel — active deployments */}
-                      {isActive && (
+                      {isActive && confirmingCancelId === deploy.id ? (
+                        <div className="flex items-center gap-1.5" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                          <span className="text-[10px] text-white/40">Kill build?</span>
+                          <button
+                            onClick={(e) => handleCancelConfirm(e, deploy.id)}
+                            className="px-2 py-0.5 rounded bg-danger-500/20 border border-danger-500/30 text-danger-400 text-[10px] font-semibold hover:bg-danger-500/30 transition-colors"
+                          >Yes</button>
+                          <button
+                            onClick={handleCancelDismiss}
+                            className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-white/40 text-[10px] font-semibold hover:bg-white/10 transition-colors"
+                          >No</button>
+                        </div>
+                      ) : isActive && (
                         <button
-                          onClick={(e) => handleCancel(e, deploy.id)}
+                          onClick={(e) => handleCancelClick(e, deploy.id)}
                           disabled={cancellingId === deploy.id}
                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-danger-500/10 border border-danger-500/20 text-danger-400 hover:bg-danger-500/20 transition-all text-[11px] font-medium disabled:opacity-50"
                           title="Cancel deployment"
@@ -228,6 +266,39 @@ export default function DeploymentsPage() {
               );
             })}
           </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="px-5 py-3 border-t border-white/5 flex items-center justify-between">
+              <button
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="flex items-center gap-1 text-xs text-white/40 hover:text-white/70 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" /> Previous
+              </button>
+              <div className="flex items-center gap-1">
+                {Array.from({ length: totalPages }, (_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setPage(i)}
+                    className={`w-7 h-7 rounded-md text-xs font-medium transition-colors ${
+                      i === page
+                        ? 'bg-brand-500/20 text-brand-400 border border-brand-500/30'
+                        : 'text-white/30 hover:text-white/60 hover:bg-white/5'
+                    }`}
+                  >{i + 1}</button>
+                ))}
+              </div>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                className="flex items-center gap-1 text-xs text-white/40 hover:text-white/70 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Next <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       )}
       {/* Trigger Deploy SlideOver */}

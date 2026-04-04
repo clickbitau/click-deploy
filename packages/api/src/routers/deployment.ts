@@ -46,8 +46,12 @@ export const deploymentRouter = createRouter({
   listRecent: protectedProcedure
     .input(z.object({
       limit: z.number().int().min(1).max(50).default(10),
+      offset: z.number().int().min(0).default(0),
     }).optional())
     .query(async ({ ctx, input }) => {
+      const limit = input?.limit ?? 10;
+      const offset = input?.offset ?? 0;
+
       // Get all project IDs for this org
       const orgProjects = await ctx.db.query.projects.findMany({
         where: eq(projects.organizationId, ctx.session.organizationId),
@@ -56,7 +60,7 @@ export const deploymentRouter = createRouter({
 
       const projectIds = orgProjects.map((p) => p.id);
 
-      if (projectIds.length === 0) return [];
+      if (projectIds.length === 0) return { items: [], total: 0 };
 
       // Get services for those projects
       const orgServices = await ctx.db.query.services.findMany({
@@ -64,11 +68,10 @@ export const deploymentRouter = createRouter({
         columns: { id: true, name: true, projectId: true },
       });
 
-      // For a proper implementation, we'd do a join query.
-      // For now, fetch recent deployments and filter.
+      // Fetch more than needed to filter by org, then paginate
       const recent = await ctx.db.query.deployments.findMany({
         orderBy: [desc(deployments.createdAt)],
-        limit: input?.limit ?? 10,
+        limit: 200, // fetch enough to count total for this org
         with: {
           service: {
             columns: { id: true, name: true, projectId: true },
@@ -84,9 +87,14 @@ export const deploymentRouter = createRouter({
       });
 
       // Filter to only this org's deployments
-      return recent.filter(
+      const orgDeployments = recent.filter(
         (d) => d.service.project.organizationId === ctx.session.organizationId
       );
+
+      return {
+        items: orgDeployments.slice(offset, offset + limit),
+        total: orgDeployments.length,
+      };
     }),
 
   /** Get a single deployment with full details */
