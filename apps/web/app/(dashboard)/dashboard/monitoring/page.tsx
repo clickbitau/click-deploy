@@ -15,6 +15,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
+import { EmptyState } from '@/components/empty-state';
 
 function ProgressRing({ value, size = 80, stroke = 6, color = '#22d3ee' }: { value: number; size?: number; stroke?: number; color?: string }) {
   const radius = (size - stroke) / 2;
@@ -204,11 +205,13 @@ export default function MonitoringPage() {
         )}
 
         {!isLoading && allNodes.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16">
-            <Server className="w-10 h-10 text-white/15 mb-3" />
-            <p className="text-sm text-white/40">No nodes to monitor</p>
-            <p className="text-xs text-white/20 mt-1">Add nodes to see real-time resource metrics</p>
-          </div>
+          <EmptyState
+            icon={Server}
+            title="No nodes to monitor"
+            description="Add nodes to see real-time resource metrics"
+            actionLabel="Add Node"
+            actionIcon={Server}
+          />
         )}
 
         {!isLoading && allNodes.length > 0 && (
