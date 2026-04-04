@@ -17,6 +17,7 @@ import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
 import { SlideOver, FormField, FormInput, FormSelect, FormTextarea } from '@/components/slide-over';
+import { EmptyState } from '@/components/empty-state';
 
 const envBadge: Record<string, string> = {
   production: 'bg-success-500/10 text-success-400 border-success-500/20',
@@ -72,19 +73,14 @@ export default function ProjectsPage() {
 
       {/* Empty state */}
       {!isLoading && (!projects || projects.length === 0) && (
-        <div className="glass-card flex flex-col items-center justify-center py-20">
-          <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-5">
-            <FolderKanban className="w-8 h-8 text-white/20" />
-          </div>
-          <h3 className="text-sm font-semibold text-white/60 mb-1">No projects yet</h3>
-          <p className="text-xs text-white/30 mb-6 max-w-sm text-center">
-            Create your first project to start deploying services. A project groups related services together.
-          </p>
-          <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            Create Project
-          </button>
-        </div>
+        <EmptyState
+          icon={FolderKanban}
+          title="No projects yet"
+          description="Create your first project to start deploying services. A project groups related services together."
+          actionLabel="Create Project"
+          actionIcon={Plus}
+          onAction={() => setShowCreate(true)}
+        />
       )}
 
       {/* Projects Grid */}

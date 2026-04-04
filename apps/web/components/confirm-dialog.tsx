@@ -10,6 +10,7 @@ interface ConfirmOptions {
   confirmText?: string;
   cancelText?: string;
   variant?: 'danger' | 'warning' | 'info';
+  verificationText?: string;
 }
 
 interface ConfirmContextType {
@@ -30,12 +31,14 @@ export function useConfirm() {
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const [options, setOptions] = useState<ConfirmOptions | null>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const [verifyInput, setVerifyInput] = useState('');
   const resolveRef = useRef<((value: boolean) => void) | null>(null);
 
   const confirm = useCallback((opts: ConfirmOptions): Promise<boolean> => {
     return new Promise<boolean>((resolve) => {
       resolveRef.current = resolve;
       setOptions(opts);
+      setVerifyInput('');
       setIsOpen(true);
     });
   }, []);
@@ -105,6 +108,23 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
                 </button>
               </div>
 
+              {/* Verification Input */}
+              {options?.verificationText && (
+                <div className="px-5 py-2">
+                  <label className="block text-xs text-white/50 mb-1.5">
+                    To confirm, type <span className="font-mono text-white/90 bg-white/10 px-1 py-0.5 rounded select-all">{options.verificationText}</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={verifyInput}
+                    onChange={(e) => setVerifyInput(e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-[var(--text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] transition-all"
+                    placeholder={options.verificationText}
+                    autoFocus
+                  />
+                </div>
+              )}
+
               {/* Actions */}
               <div className="px-5 py-4 flex items-center justify-end gap-2 mt-2">
                 <button
@@ -115,7 +135,8 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
                 </button>
                 <button
                   onClick={() => handleClose(true)}
-                  className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${styles.button}`}
+                  disabled={options?.verificationText ? verifyInput !== options.verificationText : false}
+                  className={`px-4 py-2 rounded-lg text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed ${styles.button}`}
                 >
                   {options?.confirmText || 'Confirm'}
                 </button>

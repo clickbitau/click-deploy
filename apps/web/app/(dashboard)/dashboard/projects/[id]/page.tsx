@@ -24,6 +24,8 @@ import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { SlideOver, FormField, FormInput, FormSelect, FormTextarea } from '@/components/slide-over';
 import { useConfirm } from '@/components/confirm-dialog';
+import { EmptyState } from '@/components/empty-state';
+import { toast } from 'sonner';
 
 const statusConfig: Record<string, { class: string; dot: string; label: string }> = {
   running: { class: 'text-success-400', dot: 'status-running', label: 'Running' },
@@ -58,24 +60,52 @@ export default function ProjectDetailPage() {
   const confirm = useConfirm();
 
   const handleDeleteProject = async () => {
-    const ok = await confirm({ title: 'Delete Project', message: 'This will permanently delete this project and all its services. This action cannot be undone.', confirmText: 'Delete Project', variant: 'danger' });
+    const ok = await confirm({
+      title: 'Delete Project',
+      message: 'This will permanently delete this project and all its services. This action cannot be undone.',
+      confirmText: 'Delete Project',
+      variant: 'danger',
+      verificationText: project?.name || 'delete',
+    });
     if (!ok) return;
     deleteProject.mutate({ id: projectId }, {
-      onSuccess: () => router.push('/dashboard/projects'),
+      onSuccess: () => {
+        toast.success(`Project ${project?.name} deleted successfully`);
+        router.push('/dashboard/projects');
+      },
+      onError: (err: any) => toast.error(`Failed to delete project: ${err.message}`),
     });
   };
 
-  const handleDeleteService = async (serviceId: string) => {
-    const ok = await confirm({ title: 'Delete Service', message: 'This will remove the service and its Docker Swarm deployment.', confirmText: 'Delete', variant: 'danger' });
+  const handleDeleteService = async (serviceId: string, serviceName: string) => {
+    const ok = await confirm({
+      title: 'Delete Service',
+      message: 'This will remove the service and its Docker Swarm deployment.',
+      confirmText: 'Delete',
+      variant: 'danger',
+      verificationText: serviceName,
+    });
     if (!ok) return;
-    deleteService.mutate({ id: serviceId }, { onSuccess: () => refetch() });
+    deleteService.mutate({ id: serviceId }, { 
+      onSuccess: () => {
+        toast.success(`Service ${serviceName} deleted successfully`);
+        refetch(); 
+      },
+      onError: (err: any) => toast.error(`Failed to delete service: ${err.message}`),
+    });
   };
 
   const handleDeploy = (serviceId: string) => {
     setDeployingServiceId(serviceId);
     triggerDeploy.mutate({ serviceId }, {
-      onSuccess: () => setDeployingServiceId(null),
-      onError: () => setDeployingServiceId(null),
+      onSuccess: () => {
+        setDeployingServiceId(null);
+        toast.success(`Deployment triggered successfully`);
+      },
+      onError: (err: any) => {
+        setDeployingServiceId(null);
+        toast.error(`Failed to trigger deployment: ${err.message}`);
+      },
     });
   };
 
@@ -182,15 +212,14 @@ export default function ProjectDetailPage() {
       </div>
 
       {services.length === 0 ? (
-        <div className="glass-card flex flex-col items-center justify-center py-16">
-          <Container className="w-10 h-10 text-white/15 mb-3" />
-          <p className="text-sm text-white/40 mb-1">No services in this project</p>
-          <p className="text-xs text-white/20 mb-5">Add a service to deploy an application or database</p>
-          <button onClick={() => setShowAddService(true)} className="btn-primary flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            Add Service
-          </button>
-        </div>
+        <EmptyState
+          icon={Container}
+          title="No services in this project"
+          description="Add a service to deploy an application or database"
+          actionLabel="Add Service"
+          actionIcon={Plus}
+          onAction={() => setShowAddService(true)}
+        />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {services.map((service: any) => {
@@ -247,7 +276,7 @@ export default function ProjectDetailPage() {
                     Deploy
                   </button>
                   <button
-                    onClick={(e) => { e.preventDefault(); handleDeleteService(service.id); }}
+                    onClick={(e) => { e.preventDefault(); handleDeleteService(service.id, service.name); }}
                     className="text-[11px] font-medium px-3 py-1.5 rounded-md text-white/30 hover:bg-red-500/10 hover:text-danger-400 transition-colors opacity-0 group-hover:opacity-100"
                   >
                     Delete
@@ -347,7 +376,12 @@ function AddServiceSlideOver({ open, onClose, projectId, onSuccess }: {
       buildNodeId: buildNodeId || undefined,
       targetNodeId: targetNodeId || undefined,
     }, {
-      onSuccess: () => { handleClose(); onSuccess(); },
+      onSuccess: () => { 
+        handleClose(); 
+        onSuccess(); 
+        toast.success(`Service ${name} created successfully`);
+      },
+      onError: (err: any) => toast.error(`Failed to create service: ${err.message}`),
     });
   };
 
@@ -508,7 +542,12 @@ function EditProjectSlideOver({ open, onClose, project, onSuccess }: {
       description,
       environment,
     }, {
-      onSuccess: () => { onClose(); onSuccess(); },
+      onSuccess: () => { 
+        onClose(); 
+        onSuccess(); 
+        toast.success(`Project ${name} updated`);
+      },
+      onError: (err: any) => toast.error(`Failed to update project: ${err.message}`),
     });
   };
 

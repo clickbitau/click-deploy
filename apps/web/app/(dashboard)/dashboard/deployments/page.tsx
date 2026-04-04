@@ -21,6 +21,8 @@ import {
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { SlideOver, FormField, FormSelect } from '@/components/slide-over';
+import { EmptyState } from '@/components/empty-state';
+import { toast } from 'sonner';
 import Link from 'next/link';
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; class: string; bg: string; label: string }> = {
@@ -70,8 +72,15 @@ export default function DeploymentsPage() {
   const handleRollback = (deployId: string, serviceId: string) => {
     setRollingBackId(deployId);
     rollback.mutate({ serviceId, targetDeploymentId: deployId }, {
-      onSuccess: () => { setRollingBackId(null); refetch(); },
-      onError: () => setRollingBackId(null),
+      onSuccess: () => { 
+        setRollingBackId(null); 
+        refetch(); 
+        toast.success(`Rollback initiated successfully`);
+      },
+      onError: (err: any) => {
+        setRollingBackId(null);
+        toast.error(`Fail to initiate rollback: ${err.message}`);
+      },
     });
   };
 
@@ -87,10 +96,14 @@ export default function DeploymentsPage() {
     setConfirmingCancelId(null);
     setCancellingId(deployId);
     cancelDeploy.mutate({ id: deployId }, {
-      onSuccess: () => { setCancellingId(null); refetch(); },
-      onError: (err) => {
+      onSuccess: () => { 
+        setCancellingId(null); 
+        refetch(); 
+        toast.success(`Deployment cancelled safely`);
+      },
+      onError: (err: any) => {
         setCancellingId(null);
-        alert(`Cancel failed: ${err.message}`);
+        toast.error(`Cancel failed: ${err.message}`);
       },
     });
   };
@@ -135,19 +148,14 @@ export default function DeploymentsPage() {
 
       {/* Empty */}
       {!isLoading && (!deployments || deployments.length === 0) && total === 0 && (
-        <div className="glass-card flex flex-col items-center justify-center py-20">
-          <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-5">
-            <Rocket className="w-8 h-8 text-white/20" />
-          </div>
-          <h3 className="text-sm font-semibold text-white/60 mb-1">No deployments yet</h3>
-          <p className="text-xs text-white/30 mb-6 max-w-sm text-center">
-            Deployments will appear here when you deploy a service. Push to GitHub or trigger a manual deploy.
-          </p>
-          <button onClick={() => setShowTrigger(true)} className="btn-primary flex items-center gap-2">
-            <Play className="w-4 h-4" />
-            Trigger Deploy
-          </button>
-        </div>
+        <EmptyState
+          icon={Rocket}
+          title="No deployments yet"
+          description="Deployments will appear here when you deploy a service. Push to GitHub or trigger a manual deploy."
+          actionLabel="Trigger Deploy"
+          actionIcon={Play}
+          onAction={() => setShowTrigger(true)}
+        />
       )}
 
       {/* Deployment List */}
@@ -353,7 +361,12 @@ function TriggerDeploySlideOver({ open, onClose, onSuccess }: {
   const handleDeploy = () => {
     if (!serviceId) return;
     triggerDeploy.mutate({ serviceId }, {
-      onSuccess: () => { handleClose(); onSuccess(); },
+      onSuccess: () => { 
+        handleClose(); 
+        onSuccess(); 
+        toast.success(`Deployment queued inside the Swarm engine`);
+      },
+      onError: (err: any) => toast.error(`Refused to trigger deployment: ${err.message}`)
     });
   };
 

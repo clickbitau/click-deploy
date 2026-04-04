@@ -130,8 +130,14 @@ export default function ServiceDetailPage() {
     });
   };
 
-  const handleDeleteDomain = async (domainId: string) => {
-    const ok = await confirm({ title: 'Remove Domain', message: 'This will remove the domain from this service.', confirmText: 'Remove', variant: 'danger' });
+  const handleDeleteDomain = async (domainId: string, hostname: string) => {
+    const ok = await confirm({
+      title: 'Remove Domain',
+      message: 'This will remove the domain from this service.',
+      confirmText: 'Remove',
+      variant: 'danger',
+      verificationText: hostname,
+    });
     if (!ok) return;
     deleteDomain.mutate({ id: domainId }, { onSuccess: () => refetchDomains() });
   };
@@ -504,7 +510,7 @@ export default function ServiceDetailPage() {
                     </div>
                   </div>
                   <button
-                    onClick={() => handleDeleteDomain(domain.id)}
+                    onClick={() => handleDeleteDomain(domain.id, domain.hostname)}
                     className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-red-500/10 rounded"
                   >
                     <Trash2 className="w-3.5 h-3.5 text-danger-400" />
