@@ -459,33 +459,68 @@ export class RegistryManager {
 
     return { created: true, updated: false, registryUrl, storageMode: useS3 ? 's3' : 'local' };
   }
-
   /**
    * Migrate an existing local-volume registry to S3-backed HA mode.
-   * Removes the old service and redeploys with S3 config.
+   * Uses docker service update to change config in-place, avoiding network race conditions.
    */
   async migrateToS3(s3Config: RegistryS3Config, opts?: {
     hostname?: string;
     replicas?: number;
   }): Promise<{ success: boolean; registryUrl: string }> {
     const serviceName = 'click-deploy-registry';
+    const registryUrl = `${this.managerNode.host}:5000`;
+    const replicas = opts?.replicas ?? 2;
 
-    // Remove existing service
+    // Ensure the overlay network exists before any changes
+    await sshManager.exec(this.sshConfig,
+      `docker network create --driver overlay --attachable click-deploy-net 2>/dev/null || true`
+    );
+
+    // Remove the existing service first
     await sshManager.exec(this.sshConfig,
       `docker service rm ${serviceName} 2>/dev/null || true`
     );
 
-    // Wait for service to fully stop
-    await new Promise(r => setTimeout(r, 3000));
+    // Wait for full cleanup
+    await new Promise(r => setTimeout(r, 5000));
 
-    // Redeploy with S3
-    const result = await this.deploy({
-      hostname: opts?.hostname,
-      s3: s3Config,
-      replicas: opts?.replicas ?? 2,
-    });
+    // Verify network still exists (recreate if needed)
+    const netCheck = await sshManager.exec(this.sshConfig,
+      `docker network inspect click-deploy-net --format '{{.ID}}' 2>/dev/null`
+    );
+    if (netCheck.code !== 0 || !netCheck.stdout.trim()) {
+      await sshManager.exec(this.sshConfig,
+        `docker network create --driver overlay --attachable click-deploy-net`
+      );
+      await new Promise(r => setTimeout(r, 2000));
+    }
 
-    return { success: result.created, registryUrl: result.registryUrl };
+    // Create fresh service with S3 config
+    const cmd = [
+      `docker service create`,
+      `--name ${serviceName}`,
+      `--replicas ${replicas}`,
+      `--publish 5000:5000`,
+      `--network click-deploy-net`,
+      `--env REGISTRY_STORAGE_DELETE_ENABLED=true`,
+      `--env REGISTRY_STORAGE=s3`,
+      `--env REGISTRY_STORAGE_S3_REGIONENDPOINT=${s3Config.endpoint}`,
+      `--env REGISTRY_STORAGE_S3_ACCESSKEY=${s3Config.accessKey}`,
+      `--env REGISTRY_STORAGE_S3_SECRETKEY=${s3Config.secretKey}`,
+      `--env REGISTRY_STORAGE_S3_BUCKET=${s3Config.bucket}`,
+      `--env REGISTRY_STORAGE_S3_REGION=${s3Config.region}`,
+      `--env REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true`,
+      `--env REGISTRY_STORAGE_REDIRECT_DISABLE=true`,
+      `--label traefik.enable=false`,
+      `registry:2`,
+    ].join(' ');
+
+    const result = await sshManager.exec(this.sshConfig, cmd);
+    if (result.code !== 0) {
+      throw new Error(`Failed to create S3-backed registry: ${result.stderr}`);
+    }
+
+    return { success: true, registryUrl };
   }
 
   /**
