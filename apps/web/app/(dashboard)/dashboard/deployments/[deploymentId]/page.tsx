@@ -18,6 +18,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow, format } from 'date-fns';
 import { useState, useEffect, useRef } from 'react';
+import { useConfirm } from '@/components/confirm-dialog';
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; class: string; label: string; bg: string }> = {
   running: { icon: CheckCircle2, class: 'text-success-400', bg: 'bg-success-500/10 border-success-500/20', label: 'Running' },
@@ -49,9 +50,11 @@ function CancelButton({ deploymentId, onCancel }: { deploymentId: string; onCanc
       onCancel();
     },
   });
+  const confirm = useConfirm();
 
-  const handleCancel = () => {
-    if (!confirm('Cancel this deployment? Any in-progress build will be killed.')) return;
+  const handleCancel = async () => {
+    const ok = await confirm({ title: 'Cancel Deployment', message: 'Any in-progress build will be killed. This cannot be undone.', confirmText: 'Cancel Deploy', variant: 'warning' });
+    if (!ok) return;
     cancelDeploy.mutate({ id: deploymentId });
   };
 
@@ -300,7 +303,7 @@ export default function DeploymentDetailPage() {
         icon={Terminal}
       />
 
-      {/* Metadata */}
+      {/* Metadata — Node Targets */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
         {deployment.buildNode && (
           <div className="glass-card p-4">
@@ -308,12 +311,48 @@ export default function DeploymentDetailPage() {
             <p className="text-sm text-white/60">{deployment.buildNode.name}</p>
           </div>
         )}
-        {deployment.deployNode && (
-          <div className="glass-card p-4">
-            <p className="text-[10px] text-white/25 uppercase tracking-wider mb-2">Deploy Node</p>
-            <p className="text-sm text-white/60">{deployment.deployNode.name}</p>
-          </div>
-        )}
+        <div className="glass-card p-4">
+          <p className="text-[10px] text-white/25 uppercase tracking-wider mb-2">
+            Deploy Target{((deployment.service as any)?.deployNodeIds as string[])?.length > 1 ? 's' : ''}
+          </p>
+          {(() => {
+            const deployNodeIds = ((deployment.service as any)?.deployNodeIds as string[]) || [];
+            if (deployNodeIds.length > 1) {
+              return (
+                <div className="space-y-1.5">
+                  {deployNodeIds.map((nid: string, idx: number) => {
+                    const isBuildNode = deployment.buildNode?.id === nid;
+                    const isDeployNode = deployment.deployNode?.id === nid;
+                    const nodeName = isDeployNode
+                      ? deployment.deployNode?.name
+                      : isBuildNode
+                        ? deployment.buildNode?.name
+                        : `Node ${idx + 1}`;
+                    return (
+                      <div key={nid} className="flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-success-500 shrink-0" />
+                        <span className="text-sm text-white/60">{nodeName}</span>
+                        {isBuildNode && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-brand-500/10 border border-brand-500/20 text-brand-400">
+                            build + deploy
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <p className="text-[10px] text-white/20 mt-1">
+                    Swarm distributes replicas across {deployNodeIds.length} nodes
+                  </p>
+                </div>
+              );
+            }
+            return (
+              <p className="text-sm text-white/60">
+                {deployment.deployNode?.name || '-'}
+              </p>
+            );
+          })()}
+        </div>
       </div>
     </div>
   );

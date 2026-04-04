@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
+import { useConfirm } from '@/components/confirm-dialog';
 
 const typeBadge: Record<string, string> = {
   dockerhub: 'bg-brand-500/10 text-brand-400',
@@ -32,9 +33,11 @@ export default function RegistryPage() {
   const { data: registries, isLoading, refetch } = trpc.registry.list.useQuery(undefined, { retry: 1 });
   const [showAdd, setShowAdd] = useState(false);
   const deleteReg = trpc.registry.delete.useMutation();
+  const confirm = useConfirm();
 
-  const handleDelete = (id: string) => {
-    if (!confirm('Remove this registry?')) return;
+  const handleDelete = async (id: string) => {
+    const ok = await confirm({ title: 'Remove Registry', message: 'This will remove the registry configuration. Existing images will not be deleted.', confirmText: 'Remove', variant: 'danger' });
+    if (!ok) return;
     deleteReg.mutate({ id }, { onSuccess: () => refetch() });
   };
 

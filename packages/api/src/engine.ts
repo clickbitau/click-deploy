@@ -61,6 +61,8 @@ interface DeploymentContext {
     username: string | null;
     password: string | null;
   } | null;
+  /** Original (LAN) registry URL for Swarm to pull from — may differ from registry.url when build node is on Tailscale */
+  registryDeployUrl: string | null;
   branch: string;
   commitSha: string | null;
   organizationId: string;
@@ -248,12 +250,20 @@ export class DeploymentEngine {
 
         try {
           const pruneConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
-          await sshManager.exec(pruneConfig, 'docker builder prune -f --keep-storage 2G 2>/dev/null || true');
+          await sshManager.exec(pruneConfig, 'docker builder prune -f --keep-storage 5G 2>/dev/null || true');
         } catch { /* non-fatal */ }
+
+        // Pull latest image for --cache-from (reuse unchanged layers)
+        const cacheFromImage = `${imageName}:latest`;
+        try {
+          const pullConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
+          await sshManager.exec(pullConfig, `docker pull ${cacheFromImage} 2>/dev/null || true`);
+          this.log(deploymentId, 'build', `Pulled cache source: ${cacheFromImage}`);
+        } catch { /* non-fatal — first build won't have a cache source */ }
 
         this.log(deploymentId, 'build', `Building image: ${fullImage}`);
         const signal = this.activeDeployments.get(deploymentId)?.signal;
-        await this.dockerBuild(deploymentId, ctx.buildNode, buildDir, fullImage, ctx.service, signal);
+        await this.dockerBuild(deploymentId, ctx.buildNode, buildDir, fullImage, ctx.service, signal, cacheFromImage);
         this.checkCancelled(deploymentId);
 
         await updateDeployment(deploymentId, {
@@ -267,6 +277,14 @@ export class DeploymentEngine {
         if (ctx.registry) {
           this.log(deploymentId, 'push', `Pushing to ${ctx.registry.url}`);
           await this.dockerPush(deploymentId, ctx.buildNode, fullImage, ctx.registry);
+
+          // Tag as :latest so next build can use --cache-from
+          try {
+            const tagConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
+            const latestImage = `${imageName}:latest`;
+            await sshManager.exec(tagConfig, `docker tag ${fullImage} ${latestImage}`);
+            await sshManager.exec(tagConfig, `docker push ${latestImage} 2>/dev/null || true`);
+          } catch { /* non-fatal — cache tag is best-effort */ }
         }
 
         // 2d. Cleanup build dir
@@ -282,7 +300,18 @@ export class DeploymentEngine {
         // ── Step 3: Deploy ─────────────────────────────────
         deployStartTime = Date.now();
         await updateDeployment(deploymentId, { deployStatus: 'deploying' });
-        await this.deployToSwarm(deploymentId, ctx, fullImage);
+
+        // If the build used a Tailscale registry URL, re-tag for Swarm (manager uses LAN URL)
+        let deployImage = fullImage;
+        if (ctx.registryDeployUrl && ctx.registry && ctx.registryDeployUrl !== ctx.registry.url) {
+          const deployImageName = fullImage.replace(ctx.registry.url, ctx.registryDeployUrl);
+          this.log(deploymentId, 'deploy', `Re-tagging ${fullImage} → ${deployImageName} (Swarm uses LAN registry)`);
+          const managerSsh = { host: ctx.managerNode.host, port: ctx.managerNode.port, username: ctx.managerNode.sshUser, privateKey: ctx.managerNode.privateKey };
+          // Pull from the original LAN registry (same physical registry, different IP)
+          await sshManager.exec(managerSsh, `docker pull ${deployImageName} 2>/dev/null || true`);
+          deployImage = deployImageName;
+        }
+        await this.deployToSwarm(deploymentId, ctx, deployImage);
 
       } else if (ctx.service.sourceType === 'image') {
         // Direct image deployment (no build needed)
@@ -686,6 +715,7 @@ export class DeploymentEngine {
       deployNode,
       managerNode,
       registry: registryForBuild,
+      registryDeployUrl: registry ? registry.url : null,
       branch: deployment.branch || deployment.service.gitBranch || 'main',
       commitSha: deployment.commitSha,
       organizationId: deployment.service.project.organizationId,
@@ -750,7 +780,8 @@ export class DeploymentEngine {
     buildDir: string,
     imageName: string,
     service: DeploymentContext['service'],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    cacheFromImage?: string
   ) {
     const sshConfig = {
       host: node.host,
@@ -791,11 +822,21 @@ export class DeploymentEngine {
         buildArgs.push(`--build-arg ${sanitize(key)}="${sanitize(value)}"`);
       }
 
+      // Build cache flags — reuse unchanged layers from previous image
+      const cacheFlags: string[] = [];
+      if (cacheFromImage) {
+        cacheFlags.push(`--cache-from ${cacheFromImage}`);
+      }
+      // Embed cache metadata so the image itself can be a cache source
+      cacheFlags.push('--build-arg BUILDKIT_INLINE_CACHE=1');
+
       const cmd = [
         buildDir.includes(':') ? `cd /d "${buildDir}" &&` : `cd ${buildDir} &&`,
+        'DOCKER_BUILDKIT=1',
         'docker build',
         `-t ${imageName}`,
         `-f ${dockerfile}`,
+        ...cacheFlags,
         ...buildArgs,
         contextPath,
       ].join(' ');

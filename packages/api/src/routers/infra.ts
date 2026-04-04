@@ -11,6 +11,52 @@ import { createRouter, adminProcedure } from '../trpc';
 import { TraefikManager, RegistryManager, TailscaleManager, sshManager } from '@click-deploy/docker';
 import { decryptPrivateKey } from '../crypto';
 
+// ── Docker Hub API helpers ─────────────────────────────────
+interface DockerHubTag {
+  name: string;
+  digest: string;
+  last_updated: string;
+}
+
+/**
+ * Fetch the latest stable tag + digest for a Docker Hub image.
+ * For traefik: latest v3.x tag. For registry: latest 2.x tag.
+ */
+async function getLatestDockerHubVersion(
+  image: string,
+  tagPattern: RegExp
+): Promise<{ tag: string; digest: string; lastUpdated: string } | null> {
+  try {
+    const url = `https://hub.docker.com/v2/repositories/library/${image}/tags?page_size=50&ordering=last_updated`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const tags = (data.results || []) as DockerHubTag[];
+    // Find the latest tag matching the pattern (e.g. v3.x for traefik)
+    const match = tags.find((t: DockerHubTag) => tagPattern.test(t.name));
+    if (!match) return null;
+    return { tag: match.name, digest: match.digest, lastUpdated: match.last_updated };
+  } catch {
+    return null;
+  }
+}
+
+/** Infra component version metadata */
+const INFRA_COMPONENTS = {
+  traefik: {
+    image: 'traefik',
+    serviceName: 'click-deploy-traefik',
+    tagPattern: /^v3\.\d+(\.\d+)?$/,   // v3.x or v3.x.y
+    fallbackTag: 'v3.3',
+  },
+  registry: {
+    image: 'registry',
+    serviceName: 'click-deploy-registry',
+    tagPattern: /^2(\.\d+)*$/,           // 2 or 2.x or 2.x.y
+    fallbackTag: '2',
+  },
+} as const;
+
 /**
  * Helper: Get the manager node with decrypted SSH key.
  */
@@ -247,10 +293,111 @@ export const infraRouter = createRouter({
     }
   }),
 
-  /** Update a specific infrastructure component */
+  /**
+   * Check for available updates on all infra components.
+   * Compares running image digest with Docker Hub latest.
+   */
+  checkForUpdates: adminProcedure.query(async ({ ctx }) => {
+    try {
+      const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
+      const sshConfig = {
+        host: manager.host, port: manager.port,
+        username: manager.sshUser, privateKey: manager.privateKey,
+      };
+
+      const results: Record<string, {
+        currentVersion: string;
+        currentDigest: string;
+        latestVersion: string | null;
+        latestDigest: string | null;
+        updateAvailable: boolean;
+        lastChecked: string;
+      }> = {};
+
+      for (const [key, comp] of Object.entries(INFRA_COMPONENTS)) {
+        // Get running image info from Swarm
+        const inspectResult = await sshManager.exec(
+          sshConfig,
+          `docker service inspect ${comp.serviceName} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null`
+        );
+        const runningImage = inspectResult.code === 0 ? inspectResult.stdout.trim() : '';
+        if (!runningImage) {
+          results[key] = {
+            currentVersion: 'not deployed',
+            currentDigest: '',
+            latestVersion: null,
+            latestDigest: null,
+            updateAvailable: false,
+            lastChecked: new Date().toISOString(),
+          };
+          continue;
+        }
+
+        // Parse current version and digest
+        // Format: image:tag@sha256:digest or image:tag
+        const currentTag = runningImage.split(':')[1]?.split('@')[0] || 'unknown';
+        const currentDigest = runningImage.includes('@') ? runningImage.split('@')[1] : '';
+
+        // Check Docker Hub for latest
+        const latest = await getLatestDockerHubVersion(comp.image, comp.tagPattern);
+
+        const updateAvailable = latest
+          ? (currentDigest && latest.digest)
+            ? !currentDigest.includes(latest.digest) && latest.tag !== currentTag
+            : latest.tag !== currentTag
+          : false;
+
+        results[key] = {
+          currentVersion: currentTag,
+          currentDigest: currentDigest || '',
+          latestVersion: latest?.tag || null,
+          latestDigest: latest?.digest || null,
+          updateAvailable,
+          lastChecked: new Date().toISOString(),
+        };
+      }
+
+      // Tailscale + Nixpacks are binary-based, not Swarm services
+      // Just report current installed version
+      try {
+        const tsResult = await sshManager.exec(
+          sshConfig,
+          'tailscale version 2>/dev/null | head -1 || echo "not installed"'
+        );
+        const nixResult = await sshManager.exec(
+          sshConfig,
+          'nixpacks --version 2>/dev/null || echo "not installed"'
+        );
+        results['tailscale'] = {
+          currentVersion: tsResult.stdout.trim(),
+          currentDigest: '',
+          latestVersion: null,
+          latestDigest: null,
+          updateAvailable: false, // Binary updates checked via `tailscale update`
+          lastChecked: new Date().toISOString(),
+        };
+        results['nixpacks'] = {
+          currentVersion: nixResult.stdout.trim(),
+          currentDigest: '',
+          latestVersion: null,
+          latestDigest: null,
+          updateAvailable: false, // Re-installed via curl
+          lastChecked: new Date().toISOString(),
+        };
+      } catch { /* non-fatal */ }
+
+      return results;
+    } catch (err: any) {
+      return { error: err.message };
+    }
+  }),
+
+  /** Update a specific infrastructure component to the latest version */
   updateComponent: adminProcedure
     .input(z.object({
-      component: z.enum(['traefik', 'registry', 'nixpacks', 'tailscale'])
+      component: z.enum(['traefik', 'registry', 'nixpacks', 'tailscale']),
+      /** Optional: specific version tag to update to (e.g. "v3.4"). If omitted, resolves latest from Docker Hub. */
+      targetVersion: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
@@ -263,13 +410,25 @@ export const infraRouter = createRouter({
       };
 
       let command = '';
+      let resolvedVersion = input.targetVersion;
+
       switch (input.component) {
-        case 'traefik':
-          command = 'docker service update --image traefik:v3.3 click-deploy-traefik --force';
+        case 'traefik': {
+          if (!resolvedVersion) {
+            const latest = await getLatestDockerHubVersion('traefik', INFRA_COMPONENTS.traefik.tagPattern);
+            resolvedVersion = latest?.tag || INFRA_COMPONENTS.traefik.fallbackTag;
+          }
+          command = `docker service update --image traefik:${resolvedVersion} click-deploy-traefik --force`;
           break;
-        case 'registry':
-          command = 'docker service update --image registry:2 click-deploy-registry --force';
+        }
+        case 'registry': {
+          if (!resolvedVersion) {
+            const latest = await getLatestDockerHubVersion('registry', INFRA_COMPONENTS.registry.tagPattern);
+            resolvedVersion = latest?.tag || INFRA_COMPONENTS.registry.fallbackTag;
+          }
+          command = `docker service update --image registry:${resolvedVersion} click-deploy-registry --force`;
           break;
+        }
         case 'nixpacks':
           command = 'curl -sSL https://nixpacks.com/install.sh | bash';
           break;
@@ -279,7 +438,11 @@ export const infraRouter = createRouter({
       }
 
       await sshManager.exec(sshConfig, command);
-      return { success: true };
+      return {
+        success: true,
+        component: input.component,
+        version: resolvedVersion || 'latest',
+      };
     }),
 
   /** Get Docker storage usage for any node */

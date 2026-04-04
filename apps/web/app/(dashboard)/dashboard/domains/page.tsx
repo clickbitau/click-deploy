@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
+import { useConfirm } from '@/components/confirm-dialog';
 
 const sslBadge: Record<string, string> = {
   letsencrypt: 'bg-success-500/10 text-success-400 border-success-500/20',
@@ -23,9 +24,11 @@ export default function DomainsPage() {
   const { data: domains, isLoading, refetch } = trpc.domain.listAll.useQuery(undefined, { retry: 1 });
   const [showAdd, setShowAdd] = useState(false);
   const deleteDomain = trpc.domain.delete.useMutation();
+  const confirm = useConfirm();
 
-  const handleDelete = (id: string) => {
-    if (!confirm('Remove this domain? Traefik routing will be updated.')) return;
+  const handleDelete = async (id: string) => {
+    const ok = await confirm({ title: 'Remove Domain', message: 'This will remove the domain and update Traefik routing. SSL certificates will be revoked.', confirmText: 'Remove', variant: 'danger' });
+    if (!ok) return;
     deleteDomain.mutate({ id }, { onSuccess: () => refetch() });
   };
 

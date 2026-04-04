@@ -31,6 +31,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
+import { useConfirm } from '@/components/confirm-dialog';
 
 function ProgressRing({ value, size = 80, strokeWidth = 6, color }: {
   value: number; size?: number; strokeWidth?: number; color: string;
@@ -91,8 +92,11 @@ export default function NodeDetailPage() {
     refetch();
   };
 
-  const handleDelete = () => {
-    if (!confirm('Remove this node from the cluster? This will not affect services already running on it.')) return;
+  const confirm = useConfirm();
+
+  const handleDelete = async () => {
+    const ok = await confirm({ title: 'Remove Node', message: 'Remove this node from the cluster? Services already running on it will not be affected.', confirmText: 'Remove Node', variant: 'danger' });
+    if (!ok) return;
     deleteNode.mutate({ id: nodeId }, {
       onSuccess: () => router.push('/dashboard/nodes'),
     });

@@ -32,6 +32,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
+import { useConfirm } from '@/components/confirm-dialog';
 
 const deployStatusConfig: Record<string, { icon: typeof CheckCircle2; class: string; dot: string; label: string }> = {
   running: { icon: CheckCircle2, class: 'text-success-400', dot: 'status-running', label: 'Running' },
@@ -84,7 +85,6 @@ export default function ServiceDetailPage() {
   const deleteDomain = trpc.domain.delete.useMutation();
   const updateService = trpc.service.update.useMutation();
 
-  const [tab, setTab] = useState<'overview' | 'deployments' | 'domains' | 'env' | 'logs' | 'resources' | 'settings'>('overview');
   const [showAddDomain, setShowAddDomain] = useState(false);
   const [showEnvVars, setShowEnvVars] = useState(false);
   const deploying = hasActiveDeployment || triggerDeploy.isPending;
@@ -92,6 +92,7 @@ export default function ServiceDetailPage() {
   const [stopping, setStopping] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [expandedDeploy, setExpandedDeploy] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const handleDeploy = () => {
     triggerDeploy.mutate({ serviceId }, {
@@ -118,8 +119,9 @@ export default function ServiceDetailPage() {
     });
   };
 
-  const handleRebuild = () => {
-    if (!confirm('Rebuild this service from existing code? This will not pull latest changes.')) return;
+  const handleRebuild = async () => {
+    const ok = await confirm({ title: 'Rebuild Service', message: 'This will rebuild from existing code without pulling latest changes. Use "Deploy Now" to fetch latest.', confirmText: 'Rebuild', variant: 'warning' });
+    if (!ok) return;
     setRebuilding(true);
     rebuildService.mutate({ id: serviceId }, {
       onSuccess: () => { setRebuilding(false); refetchDeploys(); },
@@ -127,8 +129,9 @@ export default function ServiceDetailPage() {
     });
   };
 
-  const handleDeleteDomain = (domainId: string) => {
-    if (!confirm('Remove this domain?')) return;
+  const handleDeleteDomain = async (domainId: string) => {
+    const ok = await confirm({ title: 'Remove Domain', message: 'This will remove the domain from this service.', confirmText: 'Remove', variant: 'danger' });
+    if (!ok) return;
     deleteDomain.mutate({ id: domainId }, { onSuccess: () => refetchDomains() });
   };
 

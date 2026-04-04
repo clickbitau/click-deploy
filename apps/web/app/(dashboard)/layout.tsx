@@ -32,6 +32,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { NotificationBell, ToastProvider } from '@/components/notification-bell';
 import { signOut } from '@/lib/auth-client';
 import { UpdateNotification } from '@/components/update-notification';
+import { ConfirmProvider } from '@/components/confirm-dialog';
 import { trpc } from '@/lib/trpc';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 
@@ -65,6 +66,7 @@ export default function DashboardLayout({
   };
 
   return (
+    <ConfirmProvider>
     <ToastProvider>
     <div className="flex h-screen overflow-hidden">
       {/* ── Sidebar ─────────────────────────────────── */}
@@ -149,6 +151,7 @@ export default function DashboardLayout({
       </main>
     </div>
     </ToastProvider>
+    </ConfirmProvider>
   );
 }
 

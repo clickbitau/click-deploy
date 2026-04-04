@@ -383,6 +383,10 @@ function IntegrationsTab() {
 
 function InfrastructureTab() {
   const infraStatus = trpc.infra.status.useQuery();
+  const updateCheck = trpc.infra.checkForUpdates.useQuery(undefined, {
+    retry: 1,
+    refetchInterval: 300_000, // Check every 5 minutes
+  });
   const deployTraefik = trpc.infra.deployTraefik.useMutation();
   const deployRegistry = trpc.infra.deployRegistry.useMutation();
   const deployTailscale = trpc.infra.deployTailscale.useMutation();
@@ -391,12 +395,24 @@ function InfrastructureTab() {
   const [tsAuthKey, setTsAuthKey] = useState('');
   const [updatingComponent, setUpdatingComponent] = useState<string | null>(null);
 
+  // Type guard for update data (vs error)
+  const updates = updateCheck.data && !('error' in updateCheck.data) ? updateCheck.data as Record<string, any> : null;
+
   const handleUpdate = async (component: 'traefik' | 'registry' | 'nixpacks' | 'tailscale', confirmMsg?: string) => {
-    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    const updateInfo = updates?.[component];
+    const versionStr = updateInfo?.latestVersion ? ` to ${updateInfo.latestVersion}` : '';
+    const msg = confirmMsg || (updateInfo?.updateAvailable
+      ? `Update ${component}${versionStr}? The service will be briefly restarted.`
+      : `Re-pull ${component} image? This will force a restart.`);
+    if (!window.confirm(msg)) return;
     setUpdatingComponent(component);
     try {
-      await updateComponent.mutateAsync({ component });
+      await updateComponent.mutateAsync({
+        component,
+        targetVersion: updateInfo?.latestVersion || undefined,
+      });
       await infraStatus.refetch();
+      await updateCheck.refetch();
     } catch (err) {
       alert(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -554,10 +570,18 @@ function InfrastructureTab() {
               <button
                 onClick={() => handleUpdate('traefik')}
                 disabled={!!updatingComponent}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white/70 hover:bg-white/10 transition-colors disabled:opacity-50"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors disabled:opacity-50 ${
+                  updates?.traefik?.updateAvailable
+                    ? 'bg-brand-500/10 border-brand-500/20 text-brand-400 hover:bg-brand-500/20'
+                    : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'
+                }`}
               >
-                {updatingComponent === 'traefik' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                {updatingComponent === 'traefik' ? 'Updating...' : 'Update Image'}
+                {updatingComponent === 'traefik' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : updates?.traefik?.updateAvailable ? <ArrowUpCircle className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {updatingComponent === 'traefik'
+                  ? 'Updating...'
+                  : updates?.traefik?.updateAvailable
+                    ? `Update → ${updates.traefik.latestVersion}`
+                    : 'Re-pull Image'}
               </button>
             </div>
           </div>
@@ -644,10 +668,18 @@ function InfrastructureTab() {
               <button
                 onClick={() => handleUpdate('registry')}
                 disabled={!!updatingComponent}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white/70 hover:bg-white/10 transition-colors disabled:opacity-50"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors disabled:opacity-50 ${
+                  updates?.registry?.updateAvailable
+                    ? 'bg-brand-500/10 border-brand-500/20 text-brand-400 hover:bg-brand-500/20'
+                    : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'
+                }`}
               >
-                {updatingComponent === 'registry' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                {updatingComponent === 'registry' ? 'Updating...' : 'Update Image'}
+                {updatingComponent === 'registry' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : updates?.registry?.updateAvailable ? <ArrowUpCircle className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {updatingComponent === 'registry'
+                  ? 'Updating...'
+                  : updates?.registry?.updateAvailable
+                    ? `Update → ${updates.registry.latestVersion}`
+                    : 'Re-pull Image'}
               </button>
             </div>
           </div>

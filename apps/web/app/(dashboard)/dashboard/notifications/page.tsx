@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
+import { useConfirm } from '@/components/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
 
 const typeIcons: Record<string, typeof MessageSquare> = {
@@ -56,13 +57,15 @@ export default function NotificationsPage() {
 
   const [showAdd, setShowAdd] = useState(false);
   const [tab, setTab] = useState<'channels' | 'activity'>('channels');
+  const confirm = useConfirm();
 
   const handleToggle = (id: string) => {
     toggleChannel.mutate({ id }, { onSuccess: () => refetch() });
   };
 
-  const handleDelete = (id: string) => {
-    if (!confirm('Delete this notification channel?')) return;
+  const handleDelete = async (id: string) => {
+    const ok = await confirm({ title: 'Delete Channel', message: 'This notification channel will be permanently removed. You will stop receiving alerts on this channel.', confirmText: 'Delete', variant: 'danger' });
+    if (!ok) return;
     deleteChannel.mutate({ id }, { onSuccess: () => refetch() });
   };
 

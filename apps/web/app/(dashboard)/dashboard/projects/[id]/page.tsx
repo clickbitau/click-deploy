@@ -23,6 +23,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { SlideOver, FormField, FormInput, FormSelect, FormTextarea } from '@/components/slide-over';
+import { useConfirm } from '@/components/confirm-dialog';
 
 const statusConfig: Record<string, { class: string; dot: string; label: string }> = {
   running: { class: 'text-success-400', dot: 'status-running', label: 'Running' },
@@ -54,16 +55,19 @@ export default function ProjectDetailPage() {
   const [showAddService, setShowAddService] = useState(false);
   const [showEditProject, setShowEditProject] = useState(false);
   const [deployingServiceId, setDeployingServiceId] = useState<string | null>(null);
+  const confirm = useConfirm();
 
-  const handleDeleteProject = () => {
-    if (!confirm('Delete this project and all its services? This action cannot be undone.')) return;
+  const handleDeleteProject = async () => {
+    const ok = await confirm({ title: 'Delete Project', message: 'This will permanently delete this project and all its services. This action cannot be undone.', confirmText: 'Delete Project', variant: 'danger' });
+    if (!ok) return;
     deleteProject.mutate({ id: projectId }, {
       onSuccess: () => router.push('/dashboard/projects'),
     });
   };
 
-  const handleDeleteService = (serviceId: string) => {
-    if (!confirm('Delete this service?')) return;
+  const handleDeleteService = async (serviceId: string) => {
+    const ok = await confirm({ title: 'Delete Service', message: 'This will remove the service and its Docker Swarm deployment.', confirmText: 'Delete', variant: 'danger' });
+    if (!ok) return;
     deleteService.mutate({ id: serviceId }, { onSuccess: () => refetch() });
   };
 

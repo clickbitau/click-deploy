@@ -1,10 +1,12 @@
+# syntax=docker/dockerfile:1
 # ============================================================
 # Click-Deploy — Production Dockerfile
 # ============================================================
 # Multi-stage build for the Click-Deploy PaaS portal.
 # Based on Next.js standalone output for minimal image size.
+# Optimized with BuildKit cache mounts for fast rebuilds.
 #
-# Build:  docker build -t click-deploy .
+# Build:  DOCKER_BUILDKIT=1 docker build -t click-deploy .
 # Run:    docker compose up -d
 # ============================================================
 
@@ -16,7 +18,7 @@ WORKDIR /app
 # Enable corepack for pnpm
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
-# Copy workspace configs
+# Copy workspace configs (these layers are cached if lockfile is unchanged)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/api/package.json ./packages/api/
@@ -24,8 +26,9 @@ COPY packages/database/package.json ./packages/database/
 COPY packages/docker/package.json ./packages/docker/
 COPY packages/shared/package.json ./packages/shared/
 
-# Install all dependencies
-RUN pnpm install --frozen-lockfile
+# Install all dependencies (cache pnpm store across builds)
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 # ── Stage 2: Build ───────────────────────────────────────────
 FROM node:22-alpine AS builder
@@ -56,8 +59,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ARG GIT_COMMIT_SHA=unknown
 ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
 
-# Build the monorepo (NODE_ENV=production set AFTER build so devDeps are usable)
-RUN pnpm build
+# Build the monorepo with turbo cache mount for incremental rebuilds
+# NODE_ENV=production set AFTER build so devDeps are usable
+RUN --mount=type=cache,id=turbo-cache,target=/app/.turbo \
+    pnpm build
 
 ENV NODE_ENV=production
 
