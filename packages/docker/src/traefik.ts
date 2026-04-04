@@ -418,9 +418,8 @@ export class RegistryManager {
 
     if (useS3) {
       // ── S3-backed HA mode ──
-      // No constraint → can run on any node
-      // Replicated → multiple instances for HA
-      cmdParts.push(`--replicas ${opts?.replicas ?? 2}`);
+      // Global mode → one instance per node, auto-scales with cluster
+      cmdParts.push(`--mode global`);
 
       envVars.push(
         `--env REGISTRY_STORAGE=s3`,
@@ -502,7 +501,7 @@ export class RegistryManager {
     const cmd = [
       `docker service create`,
       `--name ${serviceName}`,
-      `--replicas ${replicas}`,
+      `--mode global`,
       `--publish 5000:5000`,
       `--network click-deploy-net`,
       `--env REGISTRY_STORAGE_DELETE_ENABLED=true`,
@@ -532,9 +531,9 @@ export class RegistryManager {
    */
   async isRunning(): Promise<boolean> {
     const result = await sshManager.exec(this.sshConfig,
-      `docker service inspect click-deploy-registry --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null`
+      `docker service ps click-deploy-registry --filter 'desired-state=running' --format '{{.ID}}' 2>/dev/null`
     );
-    return result.code === 0 && parseInt(result.stdout.trim()) > 0;
+    return result.code === 0 && result.stdout.trim().length > 0;
   }
 
   /**
@@ -544,23 +543,31 @@ export class RegistryManager {
     running: boolean;
     replicas: number;
     storageMode: 'local' | 's3' | 'unknown';
+    mode: 'global' | 'replicated' | 'unknown';
   }> {
+    // Count running tasks
+    const taskCount = await sshManager.exec(this.sshConfig,
+      `docker service ps click-deploy-registry --filter 'desired-state=running' --format '{{.ID}}' 2>/dev/null`
+    );
+
+    // Get env vars to determine storage mode
     const inspect = await sshManager.exec(this.sshConfig, [
       `docker service inspect click-deploy-registry`,
-      `--format '{{.Spec.Mode.Replicated.Replicas}}|||{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{.}} {{end}}'`,
+      `--format '{{if .Spec.Mode.Global}}global{{else}}replicated{{end}}|||{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{.}} {{end}}'`,
       `2>/dev/null`,
     ].join(' '));
 
-    if (inspect.code !== 0) {
-      return { running: false, replicas: 0, storageMode: 'unknown' };
+    if (taskCount.code !== 0 && inspect.code !== 0) {
+      return { running: false, replicas: 0, storageMode: 'unknown', mode: 'unknown' };
     }
 
-    const parts = inspect.stdout.trim().split('|||');
-    const replicas = parseInt(parts[0] || '0');
-    const envStr = parts[1] || '';
+    const replicas = taskCount.stdout.trim().split('\n').filter(Boolean).length;
+    const inspectParts = inspect.stdout.trim().split('|||');
+    const mode = (inspectParts[0] || 'unknown') as 'global' | 'replicated' | 'unknown';
+    const envStr = inspectParts[1] || '';
     const storageMode = envStr.includes('REGISTRY_STORAGE=s3') ? 's3' as const : 'local' as const;
 
-    return { running: replicas > 0, replicas, storageMode };
+    return { running: replicas > 0, replicas, storageMode, mode };
   }
 
   /**

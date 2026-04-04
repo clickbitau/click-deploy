@@ -880,7 +880,7 @@ export class DeploymentEngine {
         'nixpacks build',
         contextPath,
         `--name ${imageName}`,
-        '--docker-args "--provenance=false"',
+        '--docker-output type=docker',
         ...envArgs,
       ].join(' ');
 
