@@ -294,6 +294,7 @@ export const infraRouter = createRouter({
             eq(nodes.status, 'online'),
           ),
           with: { sshKey: true },
+          orderBy: (nodes, { asc }) => [asc(nodes.name)],
         });
 
         if (allNodes.length === 0) {
@@ -402,6 +403,7 @@ export const infraRouter = createRouter({
           eq(nodes.status, 'online'),
         ),
         with: { sshKey: true },
+        orderBy: (nodes, { asc }) => [asc(nodes.name)],
       });
 
       const targetNode = input.nodeId
