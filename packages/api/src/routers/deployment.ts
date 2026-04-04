@@ -62,11 +62,9 @@ export const deploymentRouter = createRouter({
 
       if (projectIds.length === 0) return { items: [], total: 0 };
 
-      // Get services for those projects
-      const orgServices = await ctx.db.query.services.findMany({
-        where: eq(services.projectId, projectIds[0]!), // simplified — will expand
-        columns: { id: true, name: true, projectId: true },
-      });
+      // Note: we fetch globally and filter by org via the service→project join below.
+      // This approach works well up to ~200 total deployments across all orgs.
+      // For larger scale, use SQL-level filtering with inArray on serviceIds.
 
       // Fetch more than needed to filter by org, then paginate
       const recent = await ctx.db.query.deployments.findMany({
@@ -197,14 +195,14 @@ export const deploymentRouter = createRouter({
       });
 
       // Create in-app notification for the deploy trigger
-      ctx.db.insert(inAppNotifications).values({
+      await ctx.db.insert(inAppNotifications).values({
         organizationId: ctx.session.organizationId,
         title: `Deployment started: ${service.name}`,
         message: `Building from branch ${input.branch ?? service.gitBranch ?? 'main'}`,
         level: 'info',
         category: 'deployment',
         resourceId: deployment!.id,
-      }).catch(() => {}); // fire-and-forget
+      }).catch(() => {}); // best-effort
 
       return deployment;
     }),

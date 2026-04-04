@@ -179,7 +179,56 @@ export const nodeRouter = createRouter({
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      // TODO: Drain node from Swarm first, migrate services
+      const node = await ctx.db.query.nodes.findFirst({
+        where: and(
+          eq(nodes.id, input.id),
+          eq(nodes.organizationId, ctx.session.organizationId),
+        ),
+        with: { sshKey: true },
+      });
+
+      if (!node) throw new Error('Node not found');
+
+      // 1. Drain the node from Swarm if it has a swarmNodeId
+      if (node.swarmNodeId) {
+        try {
+          const managerNode = await ctx.db.query.nodes.findFirst({
+            where: and(
+              eq(nodes.organizationId, ctx.session.organizationId),
+              eq(nodes.role, 'manager'),
+              eq(nodes.status, 'online'),
+            ),
+            with: { sshKey: true },
+          });
+
+          if (managerNode?.sshKey) {
+            const sshConfig = {
+              host: managerNode.host,
+              port: managerNode.port,
+              username: managerNode.sshUser,
+              privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+            };
+            // Drain then remove from Swarm
+            await sshManager.exec(sshConfig, `docker node update --availability drain ${node.swarmNodeId} 2>/dev/null || true`);
+            // Wait a moment for tasks to migrate
+            await new Promise(r => setTimeout(r, 3000));
+            await sshManager.exec(sshConfig, `docker node rm --force ${node.swarmNodeId} 2>/dev/null || true`);
+          }
+        } catch (err) {
+          console.error('[node.delete] Failed to drain/remove from Swarm:', err);
+        }
+      }
+
+      // 2. Null-out services referencing this node
+      const { services } = await import('@click-deploy/database');
+      await ctx.db.update(services)
+        .set({ buildNodeId: null })
+        .where(eq(services.buildNodeId, input.id));
+      await ctx.db.update(services)
+        .set({ targetNodeId: null })
+        .where(eq(services.targetNodeId, input.id));
+
+      // 3. Delete the node record
       await ctx.db
         .delete(nodes)
         .where(
@@ -199,6 +248,42 @@ export const nodeRouter = createRouter({
       maintenance: z.boolean(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const node = await ctx.db.query.nodes.findFirst({
+        where: and(
+          eq(nodes.id, input.id),
+          eq(nodes.organizationId, ctx.session.organizationId),
+        ),
+      });
+
+      if (!node) throw new Error('Node not found');
+
+      // Actually drain/activate the node in Docker Swarm
+      if (node.swarmNodeId) {
+        try {
+          const managerNode = await ctx.db.query.nodes.findFirst({
+            where: and(
+              eq(nodes.organizationId, ctx.session.organizationId),
+              eq(nodes.role, 'manager'),
+              eq(nodes.status, 'online'),
+            ),
+            with: { sshKey: true },
+          });
+
+          if (managerNode?.sshKey) {
+            const sshConfig = {
+              host: managerNode.host,
+              port: managerNode.port,
+              username: managerNode.sshUser,
+              privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+            };
+            const availability = input.maintenance ? 'drain' : 'active';
+            await sshManager.exec(sshConfig, `docker node update --availability ${availability} ${node.swarmNodeId}`);
+          }
+        } catch (err) {
+          console.error('[node.setMaintenance] Failed to update Swarm availability:', err);
+        }
+      }
+
       const [updated] = await ctx.db
         .update(nodes)
         .set({
@@ -213,8 +298,6 @@ export const nodeRouter = createRouter({
           )
         )
         .returning();
-
-      // TODO: Actually drain/activate the node in Docker Swarm
 
       return updated;
     }),

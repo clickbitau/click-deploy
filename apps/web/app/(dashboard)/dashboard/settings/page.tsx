@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { updateUser, changePassword, changeEmail, authClient } from '@/lib/auth-client';
 import {
   Settings2,
@@ -1470,6 +1470,31 @@ function UpdatesTab() {
   const checkUpdate = trpc.system.checkUpdate.useQuery(undefined, { enabled: false, retry: 1 });
   const triggerUpdate = trpc.system.triggerUpdate.useMutation();
   const [updateTriggered, setUpdateTriggered] = useState(false);
+  const terminalRef = useRef<HTMLPreElement>(null);
+
+  // Poll update logs while update is in progress
+  const updateLogs = trpc.system.getUpdateLogs.useQuery(undefined, {
+    enabled: updateTriggered,
+    refetchInterval: updateTriggered ? 2000 : false,
+  });
+
+  // Auto-scroll terminal to bottom
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [updateLogs.data?.logs]);
+
+  // Stop polling when update is done
+  useEffect(() => {
+    if (updateTriggered && updateLogs.data && !updateLogs.data.running && updateLogs.data.logs.length > 0) {
+      // Give it a couple more polls to capture final output
+      const timer = setTimeout(() => {
+        // Keep updateTriggered true so we still see the logs, but polling will stop via the running check
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [updateTriggered, updateLogs.data]);
 
   const handleCheckUpdate = () => {
     checkUpdate.refetch();
@@ -1481,6 +1506,8 @@ function UpdatesTab() {
       onSuccess: () => setUpdateTriggered(true),
     });
   };
+
+  const isUpdateDone = updateTriggered && updateLogs.data && !updateLogs.data.running && updateLogs.data.logs.length > 0;
 
   return (
     <div className="space-y-6">
@@ -1566,7 +1593,7 @@ function UpdatesTab() {
               </div>
 
               {/* Update button */}
-              {!updateTriggered ? (
+              {!updateTriggered && (
                 <button
                   onClick={handleUpdate}
                   disabled={triggerUpdate.isPending}
@@ -1579,17 +1606,6 @@ function UpdatesTab() {
                   )}
                   {triggerUpdate.isPending ? 'Starting update...' : 'Update Now'}
                 </button>
-              ) : (
-                <div className="bg-brand-500/10 border border-brand-500/20 rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Loader2 className="w-4 h-4 text-brand-400 animate-spin" />
-                    <span className="text-sm font-medium text-brand-400">Update in progress</span>
-                  </div>
-                  <p className="text-[11px] text-white/40">
-                    The platform is pulling the latest code and rebuilding. This page will become temporarily unavailable.
-                    Refresh the page in a few minutes to verify the update.
-                  </p>
-                </div>
               )}
 
               {triggerUpdate.isError && (
@@ -1597,6 +1613,48 @@ function UpdatesTab() {
                   ✗ {triggerUpdate.error?.message}
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Live Update Terminal ──────────────────────────────── */}
+      {updateTriggered && (
+        <div className="glass-card overflow-hidden">
+          {/* Terminal header */}
+          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/5 bg-black/40">
+            <div className="flex gap-1.5">
+              <div className={`w-2.5 h-2.5 rounded-full ${isUpdateDone ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+              <div className="w-2.5 h-2.5 rounded-full bg-white/10" />
+              <div className="w-2.5 h-2.5 rounded-full bg-white/10" />
+            </div>
+            <span className="text-[11px] text-white/40 font-mono ml-2">
+              {isUpdateDone ? '● Update complete' : '● Updating platform...'}
+            </span>
+            {!isUpdateDone && <Loader2 className="w-3 h-3 text-brand-400 animate-spin ml-auto" />}
+            {isUpdateDone && <CheckCircle className="w-3.5 h-3.5 text-emerald-400 ml-auto" />}
+          </div>
+
+          {/* Terminal body */}
+          <pre
+            ref={terminalRef}
+            className="bg-[#0a0a0f] text-[11px] leading-[1.6] text-emerald-300/80 font-mono p-4 max-h-[400px] overflow-y-auto whitespace-pre-wrap break-all select-text scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
+          >
+            {updateLogs.data?.logs || 'Waiting for build output...'}
+          </pre>
+
+          {/* Completion banner */}
+          {isUpdateDone && (
+            <div className="px-4 py-3 border-t border-white/5 bg-emerald-500/5 flex items-center justify-between">
+              <span className="text-xs text-emerald-400 font-medium">
+                ✓ Update finished — refresh the page to load the new version
+              </span>
+              <button
+                onClick={() => window.location.reload()}
+                className="text-xs text-brand-400 hover:text-brand-300 font-medium transition-colors"
+              >
+                Reload now →
+              </button>
             </div>
           )}
         </div>

@@ -129,14 +129,15 @@ export const serviceRouter = createRouter({
         where: eq(nodes.organizationId, ctx.session.organizationId),
       });
 
-      // If no deploy nodes selected, auto-assign all deploy-capable nodes
+      // If no deploy nodes selected, auto-assign all online deploy-capable nodes
       if (!deployNodeIds || deployNodeIds.length === 0) {
         deployNodeIds = orgNodes
-          .filter(n => n.canDeploy)
+          .filter(n => n.canDeploy && n.status === 'online')
           .map(n => n.id);
-        // Fallback: at least use the first node
-        if (deployNodeIds.length === 0 && orgNodes.length > 0) {
-          deployNodeIds = [orgNodes[0]!.id];
+        // Fallback: at least use the first online node
+        if (deployNodeIds.length === 0) {
+          const fallback = orgNodes.find(n => n.status === 'online') || orgNodes[0];
+          if (fallback) deployNodeIds = [fallback.id];
         }
       }
 
@@ -145,9 +146,10 @@ export const serviceRouter = createRouter({
         targetNodeId = deployNodeIds[0];
       }
 
-      // Auto-assign build node
+      // Auto-assign build node — prefer online + canBuild
       if (!buildNodeId && orgNodes.length > 0) {
-        const buildNode = orgNodes.find(n => n.canBuild) || orgNodes[0];
+        const buildCapable = orgNodes.filter(n => n.canBuild && n.status === 'online');
+        const buildNode = buildCapable[0] || orgNodes.find(n => n.status === 'online') || orgNodes[0];
         if (buildNode) buildNodeId = buildNode.id;
       }
 
@@ -320,10 +322,11 @@ export const serviceRouter = createRouter({
         privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
       };
 
-      // Build env args from current service config
+      // Build env args from current service config (sanitize to prevent injection)
       const envVars = (service.envVars as Record<string, string>) || {};
+      const sanitize = (s: string) => s.replace(/['"\\$`!;|&(){}]/g, '');
       const envArgs = Object.entries(envVars)
-        .map(([k, v]) => `--env-add "${k}=${v}"`)
+        .map(([k, v]) => `--env-add "${sanitize(k)}=${sanitize(v)}"`)
         .join(' ');
 
       // Determine swarm service name

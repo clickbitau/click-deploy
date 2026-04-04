@@ -82,7 +82,7 @@ export const systemRouter = createRouter({
       return { success: true, name: input.name, email: input.email, image: input.image };
     }),
 
-  /** Change the current user's password (direct DB — bypasses Better-Auth client) */
+  /** Change the current user's password */
   changePassword: protectedProcedure
     .input(z.object({
       currentPassword: z.string().min(1),
@@ -90,6 +90,7 @@ export const systemRouter = createRouter({
     }))
     .mutation(async ({ ctx, input }) => {
       const { accounts } = await import('@click-deploy/database');
+      const { hashPassword, verifyPassword } = await import('better-auth/crypto');
 
       // Find the credential account for this user
       const account = await ctx.db.query.accounts.findFirst({
@@ -103,15 +104,14 @@ export const systemRouter = createRouter({
         throw new Error('No password credential found for this account');
       }
 
-      // Verify current password
-      const bcrypt = await import('bcryptjs');
-      const valid = await bcrypt.compare(input.currentPassword, account.password);
+      // Verify current password using better-auth's scrypt verifier
+      const valid = await verifyPassword({ hash: account.password, password: input.currentPassword });
       if (!valid) {
         throw new Error('Current password is incorrect');
       }
 
-      // Hash new password and update
-      const hashed = await bcrypt.hash(input.newPassword, 10);
+      // Hash new password with better-auth's scrypt and update
+      const hashed = await hashPassword(input.newPassword);
       await ctx.db.update(accounts)
         .set({ password: hashed, updatedAt: new Date() })
         .where(eq(accounts.id, account.id));
@@ -205,6 +205,42 @@ export const systemRouter = createRouter({
       } catch (err: any) {
         console.error('[system] Failed to trigger update:', err);
         throw new Error('Failed to start update script: ' + (err.message || 'SSH error'));
+      }
+    }),
+
+  /** Stream update.log from the manager node (live build output) */
+  getUpdateLogs: adminProcedure
+    .query(async ({ ctx }) => {
+      const orgNodes = await ctx.db.query.nodes.findMany({
+        where: eq(nodes.organizationId, ctx.session.organizationId),
+      });
+      const managerNode = orgNodes.find(n => n.role === 'manager');
+      if (!managerNode) return { logs: '', running: false };
+
+      const keyRecord = await ctx.db.query.sshKeys.findFirst({
+        where: eq(sshKeys.id, managerNode.sshKeyId),
+      });
+      if (!keyRecord) return { logs: '', running: false };
+
+      const sshConfig = {
+        host: managerNode.host,
+        port: managerNode.port,
+        username: managerNode.sshUser,
+        privateKey: decryptPrivateKey(keyRecord.privateKey),
+      };
+
+      try {
+        // Read the last 200 lines of the update log
+        const logResult = await sshManager.exec(sshConfig, 'tail -200 /opt/click-deploy/update.log 2>/dev/null || echo ""');
+        // Check if the update process is still running
+        const pidResult = await sshManager.exec(sshConfig, 'pgrep -f "docker compose up -d --build" >/dev/null 2>&1 && echo "running" || echo "done"');
+
+        return {
+          logs: logResult.stdout,
+          running: pidResult.stdout.trim() === 'running',
+        };
+      } catch {
+        return { logs: '', running: false };
       }
     }),
 
