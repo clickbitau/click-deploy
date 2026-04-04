@@ -18,15 +18,18 @@
 # ============================================================
 
 services:
-  # ── PostgreSQL (bundled — skip if using external DATABASE_URL) ──
+  # ── PostgreSQL (bundled — only starts with local-db profile) ─────
+  # Fresh installs use this by default. External DB users skip it.
+  # Start with: COMPOSE_PROFILES=local-db docker compose up -d
   db:
     image: postgres:16-alpine
     container_name: click-deploy-db
+    profiles: ["local-db"]
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-clickdeploy}
       POSTGRES_USER: ${POSTGRES_USER:-clickdeploy}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
     volumes:
       - click-deploy-db:/var/lib/postgresql/data
     ports:

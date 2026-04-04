@@ -228,10 +228,15 @@ if [ ! -f .env ]; then
 # Generated on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # ============================================================
 
-# ── Local Database (bundled PostgreSQL container) ─────────
-# The default setup uses a local PostgreSQL container.
-# To use an external database (Supabase, Neon, RDS, etc.),
-# set DATABASE_URL below and run: docker compose up -d --scale db=0
+# ── Database Mode ──────────────────────────────────────────
+# LOCAL (default): Uses a bundled PostgreSQL container.
+#   COMPOSE_PROFILES=local-db activates the local db service.
+#   POSTGRES_PASSWORD is the password for the local container.
+#
+# EXTERNAL: To use Supabase, Neon, RDS, etc:
+#   1. Comment out COMPOSE_PROFILES and POSTGRES_PASSWORD
+#   2. Uncomment and set DATABASE_URL
+COMPOSE_PROFILES=local-db
 POSTGRES_PASSWORD=${DB_PASSWORD}
 # DATABASE_URL=postgresql://user:pass@host:5432/dbname
 
@@ -249,7 +254,7 @@ GITHUB_WEBHOOK_SECRET=${WEBHOOK_SECRET}
 # GITHUB_CLIENT_ID=
 # GITHUB_CLIENT_SECRET=
 
-# Supabase Realtime (optional — only for external Supabase databases)
+# Supabase Realtime (optional — only if using external Supabase DB)
 # NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 # NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
