@@ -31,6 +31,25 @@ async function sendEmail(smtpConfig: any, to: string, subject: string, html: str
 }
 
 export const systemRouter = createRouter({
+  /** Get the current platform version */
+  version: protectedProcedure
+    .query(async () => {
+      let version = '0.1.0';
+      let commitSha = 'unknown';
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const pkgPath = path.resolve('/opt/click-deploy/package.json');
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+        version = pkg.version || version;
+      } catch {}
+      try {
+        const { execSync } = await import('child_process');
+        commitSha = execSync('git rev-parse --short HEAD 2>/dev/null || echo unknown', { cwd: '/opt/click-deploy' }).toString().trim();
+      } catch {}
+      return { version, commitSha };
+    }),
+
   /** Get the current user's profile (bypasses session cache) */
   getProfile: protectedProcedure
     .query(async ({ ctx }) => {

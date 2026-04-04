@@ -24,6 +24,10 @@ import {
   Trash2,
   Mail,
   Camera,
+  RefreshCw,
+  Download,
+  GitCommit,
+  ArrowUpCircle,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 
@@ -35,6 +39,7 @@ const tabs = [
   { id: 'security', label: 'Security', icon: Shield },
   { id: 'team', label: 'Team', icon: Users },
   { id: 'api-keys', label: 'API Keys', icon: Key },
+  { id: 'updates', label: 'Updates', icon: ArrowUpCircle },
 ];
 
 export default function SettingsPage() {
@@ -209,6 +214,7 @@ export default function SettingsPage() {
           )}
 
           {activeTab === 'integrations' && <IntegrationsTab />}
+          {activeTab === 'updates' && <UpdatesTab />}
         </div>
       </div>
     </div>
@@ -1464,6 +1470,148 @@ function ProfileTab({ user, onUserUpdate }: { user: any; onUserUpdate: (u: any) 
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Updates Tab ─────────────────────────────────────────────
+
+function UpdatesTab() {
+  const versionQuery = trpc.system.version.useQuery();
+  const checkUpdate = trpc.system.checkUpdate.useQuery(undefined, { enabled: false, retry: 1 });
+  const triggerUpdate = trpc.system.triggerUpdate.useMutation();
+  const [updateTriggered, setUpdateTriggered] = useState(false);
+
+  const handleCheckUpdate = () => {
+    checkUpdate.refetch();
+  };
+
+  const handleUpdate = () => {
+    if (!confirm('This will pull the latest code and rebuild the platform. The dashboard may be temporarily unavailable. Continue?')) return;
+    triggerUpdate.mutate(undefined, {
+      onSuccess: () => setUpdateTriggered(true),
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Current Version */}
+      <div className="glass-card p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500/20 to-accent-500/20 flex items-center justify-center">
+            <ArrowUpCircle className="w-5 h-5 text-brand-400" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">Platform Version</h2>
+            <p className="text-[11px] text-white/30">Click-Deploy self-hosted instance</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 mb-5">
+          <div className="bg-white/[0.02] rounded-lg p-4 border border-white/5">
+            <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Version</p>
+            <p className="text-lg font-bold text-white/90 font-mono">
+              {versionQuery.isLoading ? '...' : `v${versionQuery.data?.version || '0.1.0'}`}
+            </p>
+          </div>
+          <div className="bg-white/[0.02] rounded-lg p-4 border border-white/5">
+            <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Commit</p>
+            <div className="flex items-center gap-1.5">
+              <GitCommit className="w-4 h-4 text-white/30" />
+              <p className="text-sm font-mono text-white/60">
+                {versionQuery.isLoading ? '...' : versionQuery.data?.commitSha || 'unknown'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <button
+          onClick={handleCheckUpdate}
+          disabled={checkUpdate.isFetching}
+          className="btn-primary flex items-center gap-2 w-full justify-center"
+        >
+          {checkUpdate.isFetching ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <RefreshCw className="w-4 h-4" />
+          )}
+          {checkUpdate.isFetching ? 'Checking...' : 'Check for Updates'}
+        </button>
+      </div>
+
+      {/* Update Results */}
+      {checkUpdate.data && (
+        <div className="glass-card p-6">
+          {checkUpdate.data.error ? (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 text-xs text-red-400">
+              <p className="font-medium mb-1">Cannot check for updates</p>
+              <p className="text-red-400/70">{checkUpdate.data.error}</p>
+            </div>
+          ) : !checkUpdate.data.updateAvailable ? (
+            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4 flex items-center gap-3">
+              <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-emerald-400">You're up to date!</p>
+                <p className="text-[11px] text-emerald-400/60 mt-0.5">No new commits on the remote repository.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Download className="w-4 h-4 text-brand-400" />
+                  <span className="text-sm font-semibold text-white/80">
+                    {checkUpdate.data.commits.length} update{checkUpdate.data.commits.length !== 1 ? 's' : ''} available
+                  </span>
+                </div>
+              </div>
+
+              {/* Commit list */}
+              <div className="bg-black/30 rounded-lg border border-white/5 divide-y divide-white/5 max-h-64 overflow-y-auto">
+                {checkUpdate.data.commits.map((commit: string, idx: number) => (
+                  <div key={idx} className="px-4 py-2.5 flex items-start gap-2.5">
+                    <GitCommit className="w-3.5 h-3.5 text-white/20 mt-0.5 shrink-0" />
+                    <span className="text-xs text-white/60 font-mono leading-relaxed">{commit}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Update button */}
+              {!updateTriggered ? (
+                <button
+                  onClick={handleUpdate}
+                  disabled={triggerUpdate.isPending}
+                  className="w-full py-3 rounded-lg bg-gradient-to-r from-brand-500 to-accent-500 text-white font-semibold text-sm flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50"
+                >
+                  {triggerUpdate.isPending ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  {triggerUpdate.isPending ? 'Starting update...' : 'Update Now'}
+                </button>
+              ) : (
+                <div className="bg-brand-500/10 border border-brand-500/20 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Loader2 className="w-4 h-4 text-brand-400 animate-spin" />
+                    <span className="text-sm font-medium text-brand-400">Update in progress</span>
+                  </div>
+                  <p className="text-[11px] text-white/40">
+                    The platform is pulling the latest code and rebuilding. This page will become temporarily unavailable.
+                    Refresh the page in a few minutes to verify the update.
+                  </p>
+                </div>
+              )}
+
+              {triggerUpdate.isError && (
+                <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-xs text-red-400">
+                  ✗ {triggerUpdate.error?.message}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
