@@ -9,6 +9,45 @@ import { sshManager } from '@click-deploy/docker';
 import { decryptPrivateKey } from '../crypto';
 import { randomBytes } from 'crypto';
 
+/**
+ * Finds the actual manager node that hosts the Click-Deploy source code installation.
+ * It checks manager nodes until it finds one with /opt/click-deploy present.
+ */
+async function getPrimaryManagerNode(ctx: any) {
+  const orgNodes = await ctx.db.query.nodes.findMany({
+    where: eq(nodes.organizationId, ctx.session.organizationId),
+  });
+  
+  // Try online managers first, then any manager
+  const managers = orgNodes.filter((n: any) => n.role === 'manager');
+  const candidates = [
+    ...managers.filter((n: any) => n.status === 'online'),
+    ...managers.filter((n: any) => n.status !== 'online')
+  ];
+
+  for (const node of candidates) {
+    const keyRecord = await ctx.db.query.sshKeys.findFirst({
+      where: eq(sshKeys.id, node.sshKeyId),
+    });
+    if (!keyRecord) continue;
+
+    const sshConfig = {
+      host: node.host,
+      port: node.port,
+      username: node.sshUser,
+      privateKey: decryptPrivateKey(keyRecord.privateKey),
+    };
+
+    try {
+      const dirCheck = await sshManager.exec(sshConfig, 'test -d /opt/click-deploy && echo "exists" || echo "missing"');
+      if (dirCheck.stdout.trim() === 'exists') {
+        return { sshConfig };
+      }
+    } catch { }
+  }
+  return null;
+}
+
 // ── SMTP helper ─────────────────────────────────────────────
 async function sendEmail(smtpConfig: any, to: string, subject: string, html: string) {
   // Dynamic import to avoid bundling issues
@@ -122,34 +161,13 @@ export const systemRouter = createRouter({
   /** Check if there are updates available on the remote repository */
   checkUpdate: adminProcedure
     .query(async ({ ctx }) => {
-      const orgNodes = await ctx.db.query.nodes.findMany({
-        where: eq(nodes.organizationId, ctx.session.organizationId),
-      });
-
-      const managerNode = orgNodes.find(n => n.role === 'manager');
-      if (!managerNode) {
-        return { updateAvailable: false, error: 'No manager node configured', commits: [] };
+      const primary = await getPrimaryManagerNode(ctx);
+      if (!primary) {
+        return { updateAvailable: false, error: 'Installation directory not found on any manager node', commits: [] };
       }
-
-      const keyRecord = await ctx.db.query.sshKeys.findFirst({
-        where: eq(sshKeys.id, managerNode.sshKeyId),
-      });
-      if (!keyRecord) {
-        return { updateAvailable: false, error: 'SSH key missing for manager node', commits: [] };
-      }
-
-      const sshConfig = {
-        host: managerNode.host,
-        port: managerNode.port,
-        username: managerNode.sshUser,
-        privateKey: decryptPrivateKey(keyRecord.privateKey),
-      };
+      const { sshConfig } = primary;
 
       try {
-        const dirCheck = await sshManager.exec(sshConfig, 'test -d /opt/click-deploy && echo "exists" || echo "missing"');
-        if (dirCheck.stdout.trim() !== 'exists') {
-          return { updateAvailable: false, error: 'Installation directory not found on host', commits: [] };
-        }
 
         await sshManager.exec(sshConfig, 'cd /opt/click-deploy && git fetch origin');
         
@@ -173,28 +191,11 @@ export const systemRouter = createRouter({
   /** Trigger an asynchronous update of the host machine */
   triggerUpdate: adminProcedure
     .mutation(async ({ ctx }) => {
-      const orgNodes = await ctx.db.query.nodes.findMany({
-        where: eq(nodes.organizationId, ctx.session.organizationId),
-      });
-
-      const managerNode = orgNodes.find(n => n.role === 'manager');
-      if (!managerNode) {
-        throw new Error('No manager node configured for this organization');
+      const primary = await getPrimaryManagerNode(ctx);
+      if (!primary) {
+        throw new Error('Installation directory not found on any manager node');
       }
-
-      const keyRecord = await ctx.db.query.sshKeys.findFirst({
-        where: eq(sshKeys.id, managerNode.sshKeyId),
-      });
-      if (!keyRecord) {
-        throw new Error('SSH key missing for manager node');
-      }
-
-      const sshConfig = {
-        host: managerNode.host,
-        port: managerNode.port,
-        username: managerNode.sshUser,
-        privateKey: decryptPrivateKey(keyRecord.privateKey),
-      };
+      const { sshConfig } = primary;
 
       try {
         // Run the update detached so it survives the container stopping.
@@ -226,23 +227,10 @@ export const systemRouter = createRouter({
   /** Stream update.log from the manager node (live build output) */
   getUpdateLogs: adminProcedure
     .query(async ({ ctx }) => {
-      const orgNodes = await ctx.db.query.nodes.findMany({
-        where: eq(nodes.organizationId, ctx.session.organizationId),
-      });
-      const managerNode = orgNodes.find(n => n.role === 'manager');
-      if (!managerNode) return { logs: '', running: false };
-
-      const keyRecord = await ctx.db.query.sshKeys.findFirst({
-        where: eq(sshKeys.id, managerNode.sshKeyId),
-      });
-      if (!keyRecord) return { logs: '', running: false };
-
-      const sshConfig = {
-        host: managerNode.host,
-        port: managerNode.port,
-        username: managerNode.sshUser,
-        privateKey: decryptPrivateKey(keyRecord.privateKey),
-      };
+      const primary = await getPrimaryManagerNode(ctx);
+      if (!primary) return { logs: '', running: false };
+      
+      const { sshConfig } = primary;
 
       try {
         // Read the last 200 lines of the update log

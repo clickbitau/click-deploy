@@ -1044,6 +1044,31 @@ export class DeploymentEngine {
       }
     }
 
+    this.log(deploymentId, 'deploy', `Waiting for service ${serviceName} to converge (verifying health)...`);
+    
+    const convergence = await swarm.watchServiceConvergence(serviceName, 180000);
+    
+    if (!convergence.converged) {
+      this.log(deploymentId, 'deploy', `Container crash/healthcheck failed. Attempting to fetch logs...`, 'error');
+      
+      // Pull crash logs
+      const logsResult = await sshManager.exec(sshConfig, `docker service logs --tail 30 ${serviceName} 2>&1`);
+      if (logsResult.stdout) {
+        logsResult.stdout.split(/[\r\n]+/)
+          .filter(Boolean)
+          .forEach((line: string) => this.log(deploymentId, 'deploy', `> ${line.trim()}`, 'error'));
+      }
+      
+      // Clean up orphaned service or rollback
+      if (!serviceExists) {
+        await swarm.removeService(serviceName).catch(() => {});
+      } else {
+        await swarm.rollbackService(serviceName).catch(() => {});
+      }
+      
+      throw new Error(`Service failed to converge: ${convergence.error || 'Unknown error'}`);
+    }
+
     this.log(deploymentId, 'deploy', `Service ${serviceName} deployed`, 'success');
   }
 

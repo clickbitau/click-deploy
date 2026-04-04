@@ -32,6 +32,7 @@ import {
   Clock,
   Plus,
   AlertTriangle,
+  Box,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 
@@ -385,8 +386,22 @@ function InfrastructureTab() {
   const deployTraefik = trpc.infra.deployTraefik.useMutation();
   const deployRegistry = trpc.infra.deployRegistry.useMutation();
   const deployTailscale = trpc.infra.deployTailscale.useMutation();
+  const updateComponent = trpc.infra.updateComponent.useMutation();
   const [acmeEmail, setAcmeEmail] = useState('');
   const [tsAuthKey, setTsAuthKey] = useState('');
+  const [updatingComponent, setUpdatingComponent] = useState<string | null>(null);
+
+  const handleUpdate = async (component: 'traefik' | 'registry' | 'nixpacks' | 'tailscale', confirmMsg?: string) => {
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    setUpdatingComponent(component);
+    try {
+      await updateComponent.mutateAsync({ component });
+      await infraStatus.refetch();
+    } catch (err) {
+      alert(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    setUpdatingComponent(null);
+  };
 
   const status = infraStatus.data;
   const isLoading = infraStatus.isLoading;
@@ -436,6 +451,12 @@ function InfrastructureTab() {
               value={tsStatus.authenticated ? 'Connected' : tsStatus.installed ? 'Installed' : 'Not installed'}
               detail={tsStatus.ipAddress}
               active={tsStatus.authenticated}
+            />
+            <StatusCard
+              label="Nixpacks Builder"
+              value={status?.nixpacks ? `v${status.nixpacks}` : 'Not installed'}
+              detail="Auto-detects build environments"
+              active={status?.nixpacks !== 'unknown' && status?.nixpacks !== 'not installed'}
             />
           </div>
         )}
@@ -526,9 +547,19 @@ function InfrastructureTab() {
                 <p className="text-sm text-white/80 font-mono">:80 :443</p>
               </div>
             </div>
-            <p className="text-[11px] text-white/30">
-              Traefik is running. Add domains to your services and SSL will be auto-provisioned.
-            </p>
+            <div className="flex items-center justify-between border-t border-white/5 pt-4">
+              <p className="text-[11px] text-white/30">
+                Traefik is running. Add domains to your services and SSL will auto-provision.
+              </p>
+              <button
+                onClick={() => handleUpdate('traefik')}
+                disabled={!!updatingComponent}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white/70 hover:bg-white/10 transition-colors disabled:opacity-50"
+              >
+                {updatingComponent === 'traefik' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {updatingComponent === 'traefik' ? 'Updating...' : 'Update Image'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -606,9 +637,19 @@ function InfrastructureTab() {
               <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Registry URL</p>
               <p className="text-sm text-white/80 font-mono">{status.registry.url}</p>
             </div>
-            <p className="text-[11px] text-white/30">
-              Registry is running. Built images will be automatically pushed here during deployments.
-            </p>
+            <div className="flex items-center justify-between border-t border-white/5 pt-4">
+              <p className="text-[11px] text-white/30">
+                Registry is running. Built images will be automatically pushed here during deployments.
+              </p>
+              <button
+                onClick={() => handleUpdate('registry')}
+                disabled={!!updatingComponent}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white/70 hover:bg-white/10 transition-colors disabled:opacity-50"
+              >
+                {updatingComponent === 'registry' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {updatingComponent === 'registry' ? 'Updating...' : 'Update Image'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -727,9 +768,19 @@ function InfrastructureTab() {
                 <p className="text-sm text-white/80 font-mono">{tsStatus.version || '-'}</p>
               </div>
             </div>
-            <p className="text-[11px] text-white/30">
-              Tailscale is connected. Add remote nodes using their Tailscale IP (100.x.x.x) as the Host in the Add Node form.
-            </p>
+            <div className="flex items-center justify-between border-t border-white/5 pt-4">
+              <p className="text-[11px] text-white/30">
+                Tailscale is connected. Add remote nodes using their Tailscale IP as the Host.
+              </p>
+              <button
+                onClick={() => handleUpdate('tailscale', 'Updating Tailscale might briefly drop active terminal connections to your nodes. Continue?')}
+                disabled={!!updatingComponent}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white/70 hover:bg-white/10 transition-colors disabled:opacity-50"
+              >
+                {updatingComponent === 'tailscale' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {updatingComponent === 'tailscale' ? 'Updating...' : 'Update Binary'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -742,6 +793,74 @@ function InfrastructureTab() {
         {deployTailscale.isError && (
           <div className="mt-3 bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-xs text-red-400">
             ✗ {deployTailscale.error?.message}
+          </div>
+        )}
+      </div>
+
+      {/* Nixpacks Setup */}
+      <div className="glass-card p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+              <Box className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold">Nixpacks Builder</h3>
+              <p className="text-[11px] text-white/30">Builds Docker images from source without a Dockerfile</p>
+            </div>
+          </div>
+          {status?.nixpacks && status.nixpacks !== 'unknown' && status.nixpacks !== 'not installed' && (
+            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+              <CheckCircle className="w-3.5 h-3.5" />
+              Installed
+            </span>
+          )}
+        </div>
+
+        {status?.nixpacks && status.nixpacks !== 'unknown' && status.nixpacks !== 'not installed' ? (
+          <div className="space-y-3">
+            <div className="bg-white/[0.02] rounded-lg p-3 w-max min-w-[200px]">
+              <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Version</p>
+              <p className="text-sm text-white/80 font-mono">{status.nixpacks}</p>
+            </div>
+            
+            <div className="flex items-center justify-between border-t border-white/5 pt-4 mt-4">
+              <p className="text-[11px] text-white/30">
+                Nixpacks automatically detects your project language and builds optimized images.
+              </p>
+              <button
+                onClick={() => handleUpdate('nixpacks')}
+                disabled={!!updatingComponent}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white/70 hover:bg-white/10 transition-colors disabled:opacity-50"
+              >
+                {updatingComponent === 'nixpacks' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {updatingComponent === 'nixpacks' ? 'Updating...' : 'Update Binary'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-4">
+              <div className="flex gap-3">
+                <Box className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-white/40">
+                  Nixpacks is not installed. Deployments without a Dockerfile will fail until it is installed.
+                </p>
+              </div>
+            </div>
+            
+            <button
+              onClick={() => handleUpdate('nixpacks')}
+              disabled={!!updatingComponent || !status?.managerNode}
+              className="btn-primary flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {updatingComponent === 'nixpacks' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              {updatingComponent === 'nixpacks' ? 'Installing...' : 'Install Nixpacks'}
+            </button>
           </div>
         )}
       </div>

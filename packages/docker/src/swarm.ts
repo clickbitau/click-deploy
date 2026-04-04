@@ -37,9 +37,11 @@ export const DEFAULT_DEPLOY_CONFIG = {
   rollbackParallelism: 1,
   rollbackDelay: '5s',
   rollbackOrder: 'start-first' as const,
-  /** Keep last 2 task slots for rollback history */
   taskHistoryRetentionLimit: 2,
 };
+
+/** Securely escape strings for bash execution by wrapping in single quotes */
+const escapeBash = (str: string) => `'${str.replace(/'/g, "'\\''")}'`;
 
 export class SwarmManager {
   private cli: RemoteDockerCLI;
@@ -203,7 +205,7 @@ export class SwarmManager {
     };
     networks?: string[];
   }): Promise<string> {
-    const args: string[] = ['docker', 'service', 'create'];
+    const args: string[] = ['docker', 'service', 'create', '--detach=true'];
 
     // Name
     args.push('--name', opts.name);
@@ -234,14 +236,14 @@ export class SwarmManager {
     // Environment
     if (opts.envVars) {
       for (const [key, value] of Object.entries(opts.envVars)) {
-        args.push('--env', `"${key}=${value}"`);
+        args.push('--env', escapeBash(`${key}=${value}`));
       }
     }
 
     // Labels
     if (opts.labels) {
       for (const [key, value] of Object.entries(opts.labels)) {
-        args.push('--label', `"${key}=${value}"`);
+        args.push('--label', escapeBash(`${key}=${value}`));
       }
     }
 
@@ -311,7 +313,7 @@ export class SwarmManager {
       force?: boolean;
     }
   ): Promise<void> {
-    const args: string[] = ['docker', 'service', 'update'];
+    const args: string[] = ['docker', 'service', 'update', '--detach=true'];
 
     args.push('--image', image);
 
@@ -321,14 +323,14 @@ export class SwarmManager {
     args.push('--update-monitor', DEFAULT_DEPLOY_CONFIG.updateMonitor);
 
     if (opts?.envVars) {
-      for (const [key, value] of Object.entries(opts.envVars)) {
-        args.push('--env-add', `"${key}=${value}"`);
+      for (const [key, value] of Object.entries(opts?.envVars)) {
+        args.push('--env-add', escapeBash(`${key}=${value}`));
       }
     }
 
     if (opts?.labels) {
-      for (const [key, value] of Object.entries(opts.labels)) {
-        args.push('--label-add', `"${key}=${value}"`);
+      for (const [key, value] of Object.entries(opts?.labels)) {
+        args.push('--label-add', escapeBash(`${key}=${value}`));
       }
     }
 

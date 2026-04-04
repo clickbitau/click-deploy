@@ -208,10 +208,16 @@ export const infraRouter = createRouter({
       const registry = new RegistryManager(manager);
       const tailscale = new TailscaleManager(manager);
 
-      const [traefikStatus, registryRunning, tailscaleStatus] = await Promise.allSettled([
+      const [traefikStatus, registryRunning, tailscaleStatus, nixpacksStatus] = await Promise.allSettled([
         traefik.getStatus(),
         registry.isRunning(),
         tailscale.getStatus(),
+        sshManager.exec({
+          host: manager.host,
+          port: manager.port,
+          username: manager.sshUser,
+          privateKey: manager.privateKey
+        }, 'nixpacks --version 2>/dev/null || echo "not installed"').then(r => r.stdout.trim())
       ]);
 
       return {
@@ -227,6 +233,7 @@ export const infraRouter = createRouter({
         tailscale: tailscaleStatus.status === 'fulfilled'
           ? tailscaleStatus.value
           : { installed: false, running: false, authenticated: false },
+        nixpacks: nixpacksStatus.status === 'fulfilled' ? nixpacksStatus.value : 'unknown',
       };
     } catch {
       return {
@@ -235,9 +242,45 @@ export const infraRouter = createRouter({
         traefik: { running: false },
         registry: { running: false },
         tailscale: { installed: false, running: false, authenticated: false },
+        nixpacks: 'unknown',
       };
     }
   }),
+
+  /** Update a specific infrastructure component */
+  updateComponent: adminProcedure
+    .input(z.object({
+      component: z.enum(['traefik', 'registry', 'nixpacks', 'tailscale'])
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
+      
+      const sshConfig = {
+        host: manager.host,
+        port: manager.port,
+        username: manager.sshUser,
+        privateKey: manager.privateKey,
+      };
+
+      let command = '';
+      switch (input.component) {
+        case 'traefik':
+          command = 'docker service update --image traefik:v3.3 click-deploy-traefik --force';
+          break;
+        case 'registry':
+          command = 'docker service update --image registry:2 click-deploy-registry --force';
+          break;
+        case 'nixpacks':
+          command = 'curl -sSL https://nixpacks.com/install.sh | bash';
+          break;
+        case 'tailscale':
+          command = 'tailscale update --yes || true';
+          break;
+      }
+
+      await sshManager.exec(sshConfig, command);
+      return { success: true };
+    }),
 
   /** Get Docker storage usage for any node */
   dockerStorage: adminProcedure
