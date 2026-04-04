@@ -20,6 +20,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
+import { supabase } from '@/lib/supabase';
 import { formatDistanceToNow } from 'date-fns';
 
 // ── Level & Category configs ─────────────────────────────────
@@ -184,14 +185,31 @@ export function NotificationBell() {
 
   const { data: unreadCount = 0 } = trpc.notification.inAppUnreadCount.useQuery(
     undefined,
-    { retry: 1, refetchInterval: 15000 },
+    { retry: 1, refetchInterval: 60000 }, // Slow poll as fallback; realtime is primary
   );
   const { data: notifications, refetch } = trpc.notification.inAppList.useQuery(
     { limit: 50 },
-    { retry: 1, refetchInterval: open ? 10000 : 30000 },
+    { retry: 1, refetchInterval: 60000 },
   );
   const markRead = trpc.notification.inAppMarkRead.useMutation();
   const utils = trpc.useUtils();
+
+  // Supabase Realtime: instant notification updates
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase
+      .channel('notif-bell')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'in_app_notifications' },
+        () => {
+          utils.notification.inAppUnreadCount.invalidate();
+          refetch();
+        }
+      )
+      .subscribe();
+    return () => { supabase?.removeChannel(channel); };
+  }, [utils, refetch]);
 
   // Toast on new notifications
   useEffect(() => {
