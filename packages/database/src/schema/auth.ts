@@ -10,6 +10,7 @@ import {
   uuid,
   varchar,
   pgEnum,
+  index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
@@ -39,7 +40,9 @@ export const users = pgTable('users', {
   role: userRoleEnum('role').notNull().default('member'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  orgIdx: index('idx_users_org').on(table.organizationId),
+}));
 
 // ── Sessions (Better-Auth) ─────────────────────────────────
 export const sessions = pgTable('sessions', {

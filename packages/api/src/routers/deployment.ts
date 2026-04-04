@@ -222,8 +222,10 @@ export const deploymentRouter = createRouter({
         throw new Error('Deployment not found');
       }
 
-      if (!['pending', 'building', 'deploying'].includes(deployment.deployStatus)) {
-        throw new Error('Can only cancel active deployments (pending, building, or deploying)');
+      // Allow cancel unless the deploy is already in a terminal state
+      const terminalStates = ['failed', 'cancelled', 'rolled_back'];
+      if (terminalStates.includes(deployment.deployStatus)) {
+        throw new Error('Deployment is already in a terminal state');
       }
 
       // Try to abort the in-flight engine pipeline and kill SSH build processes

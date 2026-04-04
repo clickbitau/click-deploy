@@ -198,7 +198,7 @@ export const systemRouter = createRouter({
 
       try {
         // Run the update detached so it survives the container stopping
-        const command = `nohup sh -c 'cd /opt/click-deploy && git pull origin main && docker compose up -d --build' > /opt/click-deploy/update.log 2>&1 &`;
+        const command = `nohup sh -c 'cd /opt/click-deploy && git pull origin main && GIT_COMMIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build' > /opt/click-deploy/update.log 2>&1 &`;
         await sshManager.exec(sshConfig, command);
         
         return { success: true };

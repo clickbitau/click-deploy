@@ -1,20 +1,41 @@
 # ============================================================
 # Click-Deploy — Production Docker Compose
 # ============================================================
-# Runs the entire Click-Deploy PaaS platform:
-#   - PostgreSQL database
-#   - Click-Deploy web app (Next.js)
+# Runs the entire Click-Deploy PaaS platform.
+#
+# Two database modes:
+#   1. LOCAL (default): A bundled PostgreSQL container runs alongside
+#      the app. No external database needed. Just `docker compose up -d`.
+#   2. EXTERNAL: Point DATABASE_URL to any PostgreSQL (Supabase, Neon,
+#      RDS, etc.) and start without the local db:
+#        docker compose up -d --scale db=0
+#      or simply remove/comment the db service below.
 #
 # Usage:
-#   1. Copy .env.example to .env and fill in values
+#   1. Run ./install.sh or copy .env.example to .env and fill in values
 #   2. docker compose up -d
 #   3. Open http://your-server:3000
-#
-# For SSL, put a reverse proxy (Caddy/nginx) in front on port 443.
 # ============================================================
 
 services:
-
+  # ── PostgreSQL (bundled — skip if using external DATABASE_URL) ──
+  db:
+    image: postgres:16-alpine
+    container_name: click-deploy-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clickdeploy}
+      POSTGRES_USER: ${POSTGRES_USER:-clickdeploy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - click-deploy-db:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clickdeploy}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # ── Database Migrations (init — runs once and exits) ────────
   db-migrate:
@@ -25,8 +46,12 @@ services:
       args:
         GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     container_name: click-deploy-migrate
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-clickdeploy}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-clickdeploy}}
     working_dir: /app/packages/database
     command: ["sh", "-c", "npx drizzle-kit push --force && ([ -f /app/scripts/post-migrate.sh ] && sh /app/scripts/post-migrate.sh || true)"]
     restart: "no"
@@ -41,13 +66,18 @@ services:
     container_name: click-deploy-app
     restart: unless-stopped
     depends_on:
+      db:
+        condition: service_healthy
+        required: false
       db-migrate:
         condition: service_completed_successfully
     ports:
       - "${PORT:-3000}:3000"
     environment:
-      # Database
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      # Database — defaults to local db service; override with external URL
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-clickdeploy}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-clickdeploy}}
+
+      # Supabase Realtime (optional — only needed for external Supabase DB)
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
 
@@ -71,4 +101,6 @@ services:
 
       NODE_ENV: production
 
-
+volumes:
+  click-deploy-db:
+    driver: local

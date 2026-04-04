@@ -228,10 +228,14 @@ if [ ! -f .env ]; then
 # Generated on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # ============================================================
 
-# Database Connection String
-DATABASE_URL=postgresql://postgres.htsgmthciflwefrippwf:<YOUR-PASSWORD>@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres
+# ── Local Database (bundled PostgreSQL container) ─────────
+# The default setup uses a local PostgreSQL container.
+# To use an external database (Supabase, Neon, RDS, etc.),
+# set DATABASE_URL below and run: docker compose up -d --scale db=0
+POSTGRES_PASSWORD=${DB_PASSWORD}
+# DATABASE_URL=postgresql://user:pass@host:5432/dbname
 
-# Auth — CHANGE THIS if using a domain
+# Auth — CHANGE BETTER_AUTH_URL if using a domain or reverse proxy
 BETTER_AUTH_SECRET=${AUTH_SECRET}
 BETTER_AUTH_URL=http://${PUBLIC_IP}:${PORT}
 
@@ -244,6 +248,10 @@ GITHUB_WEBHOOK_SECRET=${WEBHOOK_SECRET}
 # GitHub OAuth (optional — set for GitHub login)
 # GITHUB_CLIENT_ID=
 # GITHUB_CLIENT_SECRET=
+
+# Supabase Realtime (optional — only for external Supabase databases)
+# NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+# NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 # Cloudflare Tunnels (optional)
 # CLOUDFLARE_API_TOKEN=

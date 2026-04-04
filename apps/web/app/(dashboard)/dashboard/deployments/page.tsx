@@ -88,7 +88,10 @@ export default function DeploymentsPage() {
     setCancellingId(deployId);
     cancelDeploy.mutate({ id: deployId }, {
       onSuccess: () => { setCancellingId(null); refetch(); },
-      onError: () => setCancellingId(null),
+      onError: (err) => {
+        setCancellingId(null);
+        alert(`Cancel failed: ${err.message}`);
+      },
     });
   };
 
