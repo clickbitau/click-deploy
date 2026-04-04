@@ -837,6 +837,31 @@ export class DeploymentEngine {
       privateKey: node.privateKey,
     };
 
+    // Ensure build node trusts the self-hosted registry (HTTP, not HTTPS)
+    if (registry?.url && !registry.username) {
+      this.log(deploymentId, 'push', `Ensuring build node trusts insecure registry ${registry.url}...`);
+      const ensureInsecureScript = [
+        `REGISTRY_URL='${registry.url}'`,
+        `DAEMON_JSON='/etc/docker/daemon.json'`,
+        `if [ -f "$DAEMON_JSON" ]; then`,
+        `  if grep -q "$REGISTRY_URL" "$DAEMON_JSON"; then`,
+        `    echo "already-configured"`,
+        `  else`,
+        `    cp "$DAEMON_JSON" "$DAEMON_JSON.bak"`,
+        `    python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d.setdefault('insecure-registries',[]).append(sys.argv[2]); json.dump(d,open(sys.argv[1],'w'),indent=2)" "$DAEMON_JSON" "$REGISTRY_URL" && systemctl restart docker && echo "configured-and-restarted"`,
+        `  fi`,
+        `else`,
+        `  echo '{"insecure-registries":["'$REGISTRY_URL'"]}' > "$DAEMON_JSON" && systemctl restart docker && echo "created-and-restarted"`,
+        `fi`,
+      ].join('\n');
+      const insecureResult = await sshManager.exec(sshConfig, ensureInsecureScript);
+      if (insecureResult.stdout.includes('restarted')) {
+        this.log(deploymentId, 'push', `Build node Docker restarted with insecure registry ${registry.url}`);
+        // Wait briefly for Docker to come back up
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    }
+
     // Login to registry if credentials provided
     if (registry && registry.username && registry.password) {
       const safePass = registry.password.replace(/["\\$`]/g, '\\$&');

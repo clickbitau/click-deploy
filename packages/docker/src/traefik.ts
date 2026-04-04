@@ -359,7 +359,7 @@ export class RegistryManager {
     sslEnabled?: boolean;
   }): Promise<{ created: boolean; updated: boolean; registryUrl: string }> {
     const serviceName = 'click-deploy-registry';
-    const registryUrl = `127.0.0.1:5000`;
+    const registryUrl = `${this.managerNode.host}:5000`;
 
     // Check if already running
     const inspect = await sshManager.exec(this.sshConfig,
@@ -431,6 +431,6 @@ export class RegistryManager {
    * Get the registry URL (always port 5000 on the manager node).
    */
   getRegistryUrl(): string {
-    return `127.0.0.1:5000`;
+    return `${this.managerNode.host}:5000`;
   }
 }
