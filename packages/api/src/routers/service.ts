@@ -4,7 +4,7 @@
 import { z } from 'zod';
 import { eq, and, desc } from 'drizzle-orm';
 import { services, projects, nodes } from '@click-deploy/database';
-import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
+import { createRouter, protectedProcedure } from '../trpc';
 
 const serviceInput = z.object({
   name: z.string().min(1).max(100),
@@ -199,7 +199,7 @@ export const serviceRouter = createRouter({
     }),
 
   /** Delete a service */
-  delete: adminProcedure
+  delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.db.query.services.findFirst({
@@ -211,7 +211,68 @@ export const serviceRouter = createRouter({
         throw new Error('Service not found');
       }
 
-      // TODO: Stop and remove Docker service before deleting record
+      // 1. Cancel any active deployments for this service
+      const { deployments } = await import('@click-deploy/database');
+      const activeDeployments = await ctx.db.query.deployments.findMany({
+        where: and(
+          eq(deployments.serviceId, input.id),
+          // pending, building, or deploying
+        ),
+      });
+      for (const d of activeDeployments) {
+        if (['pending', 'building', 'deploying'].includes(d.deployStatus)) {
+          try {
+            const { deploymentEngine } = await import('../engine');
+            await deploymentEngine.cancelDeployment(d.id);
+          } catch { /* best-effort */ }
+          await ctx.db.update(deployments).set({
+            buildStatus: d.buildStatus === 'building' ? 'cancelled' : d.buildStatus,
+            deployStatus: 'cancelled',
+            errorMessage: 'Service deleted',
+            completedAt: new Date(),
+          }).where(eq(deployments.id, d.id));
+        }
+      }
+
+      // 2. Stop and remove Docker Swarm service if it exists
+      if (existing.swarmServiceId) {
+        try {
+          const { nodes: nodesTable } = await import('@click-deploy/database');
+          const { sshManager } = await import('@click-deploy/docker');
+          const { decryptPrivateKey } = await import('../crypto');
+
+          const managerNode = await ctx.db.query.nodes.findFirst({
+            where: and(
+              eq(nodesTable.organizationId, ctx.session.organizationId),
+              eq(nodesTable.role, 'manager'),
+              eq(nodesTable.status, 'online'),
+            ),
+            with: { sshKey: true },
+          });
+
+          if (managerNode?.sshKey) {
+            const sshConfig = {
+              host: managerNode.host,
+              port: managerNode.port,
+              username: managerNode.sshUser,
+              privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+            };
+
+            const serviceName = `${existing.project.name}-${existing.name}`
+              .toLowerCase()
+              .replace(/[^a-z0-9-]/g, '-')
+              .replace(/-+/g, '-');
+
+            // Remove the Docker Swarm service
+            await sshManager.exec(sshConfig, `docker service rm ${serviceName} 2>/dev/null || true`);
+          }
+        } catch (err) {
+          console.error('[service.delete] Failed to remove Docker service:', err);
+          // Continue anyway — DB cleanup is more important
+        }
+      }
+
+      // 3. Delete the service record (deployments cascade via FK)
       await ctx.db.delete(services).where(eq(services.id, input.id));
 
       return { success: true };
@@ -360,6 +421,26 @@ export const serviceRouter = createRouter({
         throw new Error('Service not found');
       }
 
+      // Auto-resolve build node (same logic as deployment trigger)
+      const orgNodes = await ctx.db.query.nodes.findMany({
+        where: eq(nodes.organizationId, ctx.session.organizationId),
+      });
+
+      let buildNodeId = service.buildNodeId;
+      const buildCapable = orgNodes.filter((n: any) => n.canBuild && n.status === 'online');
+      if (buildCapable.length > 0) {
+        const configured = buildCapable.find((n: any) => n.id === service.buildNodeId);
+        buildNodeId = configured ? configured.id : buildCapable[0]!.id;
+      } else if (orgNodes.length > 0) {
+        buildNodeId = orgNodes[0]!.id;
+      }
+
+      let deployNodeId = service.targetNodeId;
+      if (!deployNodeId) {
+        const deployCap = orgNodes.filter((n: any) => n.canDeploy && n.status === 'online');
+        deployNodeId = deployCap.length > 0 ? deployCap[0]!.id : orgNodes[0]?.id ?? null;
+      }
+
       // Create a new deployment
       const { deployments } = await import('@click-deploy/database');
       const [deployment] = await ctx.db.insert(deployments).values({
@@ -369,8 +450,8 @@ export const serviceRouter = createRouter({
         commitSha: 'rebuild',
         commitMessage: 'Manual rebuild',
         triggeredBy: 'manual',
-        buildNodeId: service.buildNodeId,
-        deployNodeId: service.targetNodeId,
+        buildNodeId,
+        deployNodeId,
       }).returning();
 
       // Fire the engine asynchronously

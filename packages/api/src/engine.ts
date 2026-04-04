@@ -188,6 +188,15 @@ export class DeploymentEngine {
     const controller = new AbortController();
     this.activeDeployments.set(deploymentId, controller);
 
+    // ── Auto-timeout: 30 minutes max per deployment ─────────
+    const DEPLOY_TIMEOUT_MS = 30 * 60 * 1000;
+    const timeoutHandle = setTimeout(() => {
+      if (this.activeDeployments.has(deploymentId)) {
+        console.log(`[deploy] Deployment ${deploymentId} timed out after 30 minutes`);
+        controller.abort();
+      }
+    }, DEPLOY_TIMEOUT_MS);
+
     try {
       // ── Step 1: Resolve ──────────────────────────────────
       this.log('resolve', 'Loading deployment context...');
@@ -321,11 +330,13 @@ export class DeploymentEngine {
       const isCancelled = message.includes('cancelled') || controller.signal.aborted;
 
       if (isCancelled) {
-        this.log('cancelled', 'Deployment was cancelled by user', 'error');
+        const isTimeout = !message.includes('cancelled');
+        const reason = isTimeout ? 'Timed out after 30 minutes' : 'Cancelled by user';
+        this.log('cancelled', `Deployment ${isTimeout ? 'timed out' : 'was cancelled by user'}`, 'error');
         await updateDeployment(deploymentId, {
           buildStatus: buildStartTime && !deployStartTime ? 'cancelled' : undefined,
           deployStatus: 'cancelled',
-          errorMessage: 'Cancelled by user',
+          errorMessage: reason,
           buildLogs: this.logsToText(),
           completedAt: new Date(),
         });
@@ -358,6 +369,8 @@ export class DeploymentEngine {
         } catch { /* best-effort */ }
       }
     } finally {
+      // Clear the auto-timeout timer
+      clearTimeout(timeoutHandle);
       // Unregister from active deployments
       this.activeDeployments.delete(deploymentId);
     }
