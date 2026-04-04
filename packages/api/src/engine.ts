@@ -46,8 +46,8 @@ interface DeploymentContext {
     envVars: Record<string, string>;
     ports: Array<{ host?: number; container: number; protocol: string }>;
     replicas: number;
-    healthCheck: any;
-    resourceLimits: any;
+    healthCheck: { path?: string; interval?: number; timeout?: number; retries?: number } | null;
+    resourceLimits: { cpuCores?: number; memoryLimit?: number; memoryUsed?: number } | null;
     labels: Record<string, string>;
     swarmServiceId: string | null;
     projectId: string;
@@ -84,8 +84,8 @@ export type DeploymentLog = {
 // ── Helpers ─────────────────────────────────────────────────
 
 function nodeToConnectionInfo(
-  node: any,
-  sshKey: any
+  node: typeof nodes.$inferSelect,
+  sshKey: typeof sshKeys.$inferSelect
 ): NodeConnectionInfo {
   return {
     id: node.id,
