@@ -108,8 +108,8 @@ async function updateDeployment(
 // ── Deployment Engine ───────────────────────────────────────
 
 export class DeploymentEngine {
-  private logs: DeploymentLog[] = [];
-  private currentDeploymentId: string | null = null;
+  /** Per-deployment log buffers — keyed by deploymentId */
+  private deploymentLogs = new Map<string, DeploymentLog[]>();
 
   /** Track active deployments so we can cancel them mid-flight */
   private activeDeployments = new Map<string, AbortController>();
@@ -165,22 +165,23 @@ export class DeploymentEngine {
     }
   }
 
-  private log(step: string, message: string, level: DeploymentLog['level'] = 'info') {
-    this.logs.push({ step, message, timestamp: new Date(), level });
+  private log(deploymentId: string, step: string, message: string, level: DeploymentLog['level'] = 'info') {
+    if (!this.deploymentLogs.has(deploymentId)) {
+      this.deploymentLogs.set(deploymentId, []);
+    }
+    const logs = this.deploymentLogs.get(deploymentId)!;
+    logs.push({ step, message, timestamp: new Date(), level });
     console.log(`[deploy] [${step}] ${message}`);
 
     // Fire-and-forget DB update to enable live streaming of logs to the UI
-    if (this.currentDeploymentId) {
-      updateDeployment(this.currentDeploymentId, { buildLogs: this.logsToText() }).catch(() => {});
-    }
+    updateDeployment(deploymentId, { buildLogs: this.logsToText(deploymentId) }).catch(() => {});
   }
 
   /**
    * Run a full deployment: build → push → deploy → monitor
    */
   async runDeployment(deploymentId: string): Promise<void> {
-    this.currentDeploymentId = deploymentId;
-    this.logs = [];
+    this.deploymentLogs.set(deploymentId, []);
     let buildStartTime: number | null = null;
     let deployStartTime: number | null = null;
 
@@ -199,7 +200,7 @@ export class DeploymentEngine {
 
     try {
       // ── Step 1: Resolve ──────────────────────────────────
-      this.log('resolve', 'Loading deployment context...');
+      this.log(deploymentId, 'resolve', 'Loading deployment context...');
       const ctx = await this.resolveContext(deploymentId);
 
       // ── Step 2: Build ────────────────────────────────────
@@ -211,11 +212,11 @@ export class DeploymentEngine {
         });
 
         // 2a. Clone repository
-        this.log('clone', `Cloning ${ctx.service.gitUrl} (branch: ${ctx.branch})`);
+        this.log(deploymentId, 'clone', `Cloning ${ctx.service.gitUrl} (branch: ${ctx.branch})`);
         // Build dir: /tmp on Unix, %TEMP% on Windows — detected at clone time
         // We use /tmp by default; Windows path detection happens in cloneRepo via the ':' heuristic
         const buildDir = `/tmp/click-deploy-builds/${deploymentId}`;
-        await this.cloneRepo(ctx.buildNode, ctx.service.gitUrl!, ctx.branch, buildDir, ctx.organizationId);
+        await this.cloneRepo(deploymentId, ctx.buildNode, ctx.service.gitUrl!, ctx.branch, buildDir, ctx.organizationId);
         this.checkCancelled(deploymentId);
 
         // Capture commit info from the cloned repo
@@ -230,7 +231,7 @@ export class DeploymentEngine {
 
         if (commitSha) {
           ctx.commitSha = commitSha;
-          this.log('clone', `Commit: ${commitSha.slice(0, 7)} — ${commitMessage || '(no message)'}`);
+          this.log(deploymentId, 'clone', `Commit: ${commitSha.slice(0, 7)} — ${commitMessage || '(no message)'}`);
           await updateDeployment(deploymentId, { commitSha, commitMessage });
         }
 
@@ -244,25 +245,25 @@ export class DeploymentEngine {
           await sshManager.exec(pruneConfig, 'docker builder prune -f --keep-storage 2G 2>/dev/null || true');
         } catch { /* non-fatal */ }
 
-        this.log('build', `Building image: ${fullImage}`);
-        await this.dockerBuild(ctx.buildNode, buildDir, fullImage, ctx.service);
+        this.log(deploymentId, 'build', `Building image: ${fullImage}`);
+        await this.dockerBuild(deploymentId, ctx.buildNode, buildDir, fullImage, ctx.service);
         this.checkCancelled(deploymentId);
 
         await updateDeployment(deploymentId, {
           buildStatus: 'built',
           imageName: fullImage,
           buildDurationMs: Date.now() - buildStartTime,
-          buildLogs: this.logsToText(),
+          buildLogs: this.logsToText(deploymentId),
         });
 
         // 2c. Push to registry
         if (ctx.registry) {
-          this.log('push', `Pushing to ${ctx.registry.url}`);
-          await this.dockerPush(ctx.buildNode, fullImage, ctx.registry);
+          this.log(deploymentId, 'push', `Pushing to ${ctx.registry.url}`);
+          await this.dockerPush(deploymentId, ctx.buildNode, fullImage, ctx.registry);
         }
 
         // 2d. Cleanup build dir
-        this.log('cleanup', 'Removing build artifacts');
+        this.log(deploymentId, 'cleanup', 'Removing build artifacts');
         const cleanupCmd = buildDir.includes(':')
           ? `powershell -Command "Remove-Item -Recurse -Force '${buildDir}' -ErrorAction SilentlyContinue"`
           : `rm -rf ${buildDir}`;
@@ -274,7 +275,7 @@ export class DeploymentEngine {
         // ── Step 3: Deploy ─────────────────────────────────
         deployStartTime = Date.now();
         await updateDeployment(deploymentId, { deployStatus: 'deploying' });
-        await this.deployToSwarm(ctx, fullImage, deploymentId);
+        await this.deployToSwarm(deploymentId, ctx, fullImage);
 
       } else if (ctx.service.sourceType === 'image') {
         // Direct image deployment (no build needed)
@@ -286,24 +287,24 @@ export class DeploymentEngine {
         });
 
         deployStartTime = Date.now();
-        await this.deployToSwarm(ctx, fullImage, deploymentId);
+        await this.deployToSwarm(deploymentId, ctx, fullImage);
 
       } else {
         throw new Error(`Unsupported source type: ${ctx.service.sourceType}`);
       }
 
       // ── Step 4: Monitor convergence ──────────────────────
-      this.log('monitor', 'Watching service convergence...');
+      this.log(deploymentId, 'monitor', 'Watching service convergence...');
       const swarm = new SwarmManager(ctx.managerNode);
       const serviceName = this.getSwarmServiceName(ctx.service);
       const convergence = await swarm.watchServiceConvergence(serviceName, 120_000);
 
       if (convergence.converged) {
-        this.log('complete', 'Deployment successful!', 'success');
+        this.log(deploymentId, 'complete', 'Deployment successful!', 'success');
         await updateDeployment(deploymentId, {
           deployStatus: 'running',
           deployDurationMs: deployStartTime ? Date.now() - deployStartTime : null,
-          deployLogs: this.logsToText(),
+          deployLogs: this.logsToText(deploymentId),
           completedAt: new Date(),
         });
 
@@ -332,21 +333,21 @@ export class DeploymentEngine {
       if (isCancelled) {
         const isTimeout = !message.includes('cancelled');
         const reason = isTimeout ? 'Timed out after 30 minutes' : 'Cancelled by user';
-        this.log('cancelled', `Deployment ${isTimeout ? 'timed out' : 'was cancelled by user'}`, 'error');
+        this.log(deploymentId, 'cancelled', `Deployment ${isTimeout ? 'timed out' : 'was cancelled by user'}`, 'error');
         await updateDeployment(deploymentId, {
           buildStatus: buildStartTime && !deployStartTime ? 'cancelled' : undefined,
           deployStatus: 'cancelled',
           errorMessage: reason,
-          buildLogs: this.logsToText(),
+          buildLogs: this.logsToText(deploymentId),
           completedAt: new Date(),
         });
       } else {
-        this.log('error', `Deployment failed: ${message}`, 'error');
+        this.log(deploymentId, 'error', `Deployment failed: ${message}`, 'error');
         await updateDeployment(deploymentId, {
           buildStatus: buildStartTime && !deployStartTime ? 'failed' : undefined,
           deployStatus: 'failed',
           errorMessage: message,
-          buildLogs: this.logsToText(),
+          buildLogs: this.logsToText(deploymentId),
           completedAt: new Date(),
         });
 
@@ -371,8 +372,9 @@ export class DeploymentEngine {
     } finally {
       // Clear the auto-timeout timer
       clearTimeout(timeoutHandle);
-      // Unregister from active deployments
+      // Unregister from active deployments and clean up log buffer
       this.activeDeployments.delete(deploymentId);
+      this.deploymentLogs.delete(deploymentId);
     }
   }
 
@@ -380,7 +382,7 @@ export class DeploymentEngine {
    * Deploy-only (skip build) — used for rollbacks
    */
   async runDeployOnly(deploymentId: string): Promise<void> {
-    this.logs = [];
+    this.deploymentLogs.set(deploymentId, []);
 
     try {
       const ctx = await this.resolveContext(deploymentId);
@@ -395,18 +397,18 @@ export class DeploymentEngine {
       await updateDeployment(deploymentId, { deployStatus: 'deploying' });
       const deployStartTime = Date.now();
 
-      await this.deployToSwarm(ctx, deployment.imageName, deploymentId);
+      await this.deployToSwarm(deploymentId, ctx, deployment.imageName);
 
       const swarm = new SwarmManager(ctx.deployNode);
       const serviceName = this.getSwarmServiceName(ctx.service);
       const convergence = await swarm.watchServiceConvergence(serviceName, 120_000);
 
       if (convergence.converged) {
-        this.log('complete', 'Rollback deployment successful!', 'success');
+        this.log(deploymentId, 'complete', 'Rollback deployment successful!', 'success');
         await updateDeployment(deploymentId, {
           deployStatus: 'running',
           deployDurationMs: Date.now() - deployStartTime,
-          deployLogs: this.logsToText(),
+          deployLogs: this.logsToText(deploymentId),
           completedAt: new Date(),
         });
       } else {
@@ -414,11 +416,11 @@ export class DeploymentEngine {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.log('error', message, 'error');
+      this.log(deploymentId, 'error', message, 'error');
       await updateDeployment(deploymentId, {
         deployStatus: 'failed',
         errorMessage: message,
-        deployLogs: this.logsToText(),
+        deployLogs: this.logsToText(deploymentId),
         completedAt: new Date(),
       });
     }
@@ -668,6 +670,7 @@ export class DeploymentEngine {
   }
 
   private async cloneRepo(
+    deploymentId: string,
     node: NodeConnectionInfo,
     gitUrl: string,
     branch: string,
@@ -687,7 +690,7 @@ export class DeploymentEngine {
       const token = await getInstallationToken(organizationId);
       if (token) {
         authedUrl = gitUrl.replace('https://github.com', `https://x-access-token:${token}@github.com`);
-        this.log('clone', 'Using GitHub App token for private repo access');
+        this.log(deploymentId, 'clone', 'Using GitHub App token for private repo access');
       }
     }
 
@@ -702,10 +705,11 @@ export class DeploymentEngine {
       throw new Error(`Git clone failed: ${result.stderr}`);
     }
 
-    this.log('clone', `Cloned successfully to ${buildDir}`, 'success');
+    this.log(deploymentId, 'clone', `Cloned successfully to ${buildDir}`, 'success');
   }
 
   private async dockerBuild(
+    deploymentId: string,
     node: NodeConnectionInfo,
     buildDir: string,
     imageName: string,
@@ -742,11 +746,12 @@ export class DeploymentEngine {
 
     if (useDockerfile) {
       // Dockerfile build (auto-detected or explicitly specified)
-      this.log('build', `Using Dockerfile: ${dockerfile}`);
+      this.log(deploymentId, 'build', `Using Dockerfile: ${dockerfile}`);
 
+      const sanitize = (s: string) => s.replace(/['"\\$`!;|&(){}]/g, '');
       const buildArgs: string[] = [];
       for (const [key, value] of Object.entries(service.envVars)) {
-        buildArgs.push(`--build-arg ${key}="${value}"`);
+        buildArgs.push(`--build-arg ${sanitize(key)}="${sanitize(value)}"`);
       }
 
       const cmd = [
@@ -759,7 +764,7 @@ export class DeploymentEngine {
       ].join(' ');
 
       const result = await sshManager.execStream(sshConfig, cmd, (line) => {
-        this.log('build', line);
+        this.log(deploymentId, 'build', line);
       }, { idleTimeoutMs: 1800000 }); // 30 minutes timeout
 
       if (result.code !== 0) {
@@ -767,12 +772,12 @@ export class DeploymentEngine {
       }
     } else {
       // Nixpacks — default builder
-      this.log('build', `Building with nixpacks (auto-detect)...`);
+      this.log(deploymentId, 'build', `Building with nixpacks (auto-detect)...`);
 
       // Ensure nixpacks is installed
       const nixCheck = await sshManager.exec(sshConfig, 'which nixpacks || echo "NOT_FOUND"');
       if (nixCheck.stdout.trim().includes('NOT_FOUND')) {
-        this.log('build', `Installing nixpacks on build node...`);
+        this.log(deploymentId, 'build', `Installing nixpacks on build node...`);
         const installResult = await sshManager.exec(
           sshConfig,
           'curl -sSL https://nixpacks.com/install.sh | bash'
@@ -780,13 +785,14 @@ export class DeploymentEngine {
         if (installResult.code !== 0) {
           throw new Error(`Failed to install nixpacks: ${installResult.stderr}`);
         }
-        this.log('build', `Nixpacks installed successfully`);
+        this.log(deploymentId, 'build', `Nixpacks installed successfully`);
       }
 
       // Build environment args
+      const sanitize = (s: string) => s.replace(/['"\\$`!;|&(){}]/g, '');
       const envArgs: string[] = [];
       for (const [key, value] of Object.entries(service.envVars)) {
-        envArgs.push(`--env ${key}="${value}"`);
+        envArgs.push(`--env ${sanitize(key)}="${sanitize(value)}"`);
       }
 
       const nixCmd = [
@@ -799,7 +805,7 @@ export class DeploymentEngine {
       ].join(' ');
 
       const result = await sshManager.execStream(sshConfig, nixCmd, (line) => {
-        this.log('build', line);
+        this.log(deploymentId, 'build', line);
       }, { idleTimeoutMs: 1800000 }); // 30 minutes timeout
 
       if (result.code !== 0) {
@@ -807,10 +813,11 @@ export class DeploymentEngine {
       }
     }
 
-    this.log('build', `Image ${imageName} built successfully`, 'success');
+    this.log(deploymentId, 'build', `Image ${imageName} built successfully`, 'success');
   }
 
   private async dockerPush(
+    deploymentId: string,
     node: NodeConnectionInfo,
     imageName: string,
     registry: DeploymentContext['registry']
@@ -824,9 +831,11 @@ export class DeploymentEngine {
 
     // Login to registry if credentials provided
     if (registry && registry.username && registry.password) {
+      const safePass = registry.password.replace(/["\\$`]/g, '\\$&');
+      const safeUser = registry.username.replace(/["\\$`]/g, '\\$&');
       const loginResult = await sshManager.exec(
         sshConfig,
-        `echo "${registry.password}" | docker login ${registry.url} -u ${registry.username} --password-stdin`
+        `echo "${safePass}" | docker login ${registry.url} -u "${safeUser}" --password-stdin`
       );
       if (loginResult.code !== 0) {
         throw new Error(`Registry login failed: ${loginResult.stderr}`);
@@ -838,13 +847,13 @@ export class DeploymentEngine {
       throw new Error(`Docker push failed: ${result.stderr}`);
     }
 
-    this.log('push', `Pushed ${imageName} to registry`, 'success');
+    this.log(deploymentId, 'push', `Pushed ${imageName} to registry`, 'success');
   }
 
   private async deployToSwarm(
+    deploymentId: string,
     ctx: DeploymentContext,
     image: string,
-    deploymentId: string
   ) {
     const swarm = new SwarmManager(ctx.managerNode);
     const serviceName = this.getSwarmServiceName(ctx.service);
@@ -872,7 +881,7 @@ export class DeploymentEngine {
     let labeledCount = 0;
 
     if (deployNodeIds.length > 0) {
-      this.log('deploy', `Targeting ${deployNodeIds.length} node(s) for deployment`);
+      this.log(deploymentId, 'deploy', `Targeting ${deployNodeIds.length} node(s) for deployment`);
 
       // Pre-fetch all Swarm node info once (ID, hostname, addr)
       const swarmNodesResult = await sshManager.exec(
@@ -892,7 +901,7 @@ export class DeploymentEngine {
           where: eq(nodes.id, nodeId),
         });
         if (!nodeRecord) {
-          this.log('deploy', `Deploy node ${nodeId} not found in database, skipping`, 'error');
+          this.log(deploymentId, 'deploy', `Deploy node ${nodeId} not found in database, skipping`, 'error');
           continue;
         }
 
@@ -912,9 +921,9 @@ export class DeploymentEngine {
             swarmId = match.id;
             // Cache for future deployments
             await db.update(nodes).set({ swarmNodeId: swarmId }).where(eq(nodes.id, nodeId));
-            this.log('deploy', `Resolved Swarm node for "${nodeRecord.name}": ${swarmId}`);
+            this.log(deploymentId, 'deploy', `Resolved Swarm node for "${nodeRecord.name}": ${swarmId}`);
           } else {
-            this.log('deploy', `Could not resolve Swarm node for "${nodeRecord.name}" (host: ${nodeRecord.host}). Skipping placement label.`, 'error');
+            this.log(deploymentId, 'deploy', `Could not resolve Swarm node for "${nodeRecord.name}" (host: ${nodeRecord.host}). Skipping placement label.`, 'error');
             continue;
           }
         }
@@ -927,22 +936,22 @@ export class DeploymentEngine {
         if (labelResult.code === 0) {
           labeledCount++;
         } else {
-          this.log('deploy', `Failed to label Swarm node ${swarmId}: ${labelResult.stderr}`, 'error');
+          this.log(deploymentId, 'deploy', `Failed to label Swarm node ${swarmId}: ${labelResult.stderr}`, 'error');
         }
       }
 
       // Only add the constraint if we actually labeled at least one node
       if (labeledCount > 0) {
         constraints.push(`node.labels.${placementLabel}==true`);
-        this.log('deploy', `Placement constraint active: ${labeledCount}/${deployNodeIds.length} node(s) labeled`);
+        this.log(deploymentId, 'deploy', `Placement constraint active: ${labeledCount}/${deployNodeIds.length} node(s) labeled`);
       } else {
-        this.log('deploy', `No nodes could be labeled — deploying without placement constraints (Swarm will schedule freely)`, 'error');
+        this.log(deploymentId, 'deploy', `No nodes could be labeled — deploying without placement constraints (Swarm will schedule freely)`, 'error');
       }
     }
 
     if (serviceExists) {
       // Update existing service — zero-downtime rolling update
-      this.log('deploy', `Updating existing service: ${serviceName}`);
+      this.log(deploymentId, 'deploy', `Updating existing service: ${serviceName}`);
       await swarm.updateService(serviceName, image, {
         envVars: ctx.service.envVars,
         replicas: ctx.service.replicas,
@@ -950,14 +959,14 @@ export class DeploymentEngine {
         labels: {
           'click-deploy.service-id': ctx.service.id,
           'click-deploy.deployment-id': deploymentId,
-          ...this.buildTraefikLabels(ctx, serviceName),
+          ...this.buildTraefikLabels(deploymentId, ctx, serviceName),
         },
       });
     } else {
       // Create new service
-      this.log('deploy', `Creating new service: ${serviceName}`);
+      this.log(deploymentId, 'deploy', `Creating new service: ${serviceName}`);
       
-      this.log('deploy', `Checking network prerequisites...`);
+      this.log(deploymentId, 'deploy', `Checking network prerequisites...`);
       await sshManager.exec(
         sshConfig,
         `docker network inspect click-deploy-net >/dev/null 2>&1 || docker network create --driver overlay --attachable click-deploy-net`
@@ -968,7 +977,7 @@ export class DeploymentEngine {
       // Only publish host ports when NO domains are set (direct TCP/UDP access).
       const hasDomains = ctx.domains && ctx.domains.length > 0;
       if (hasDomains) {
-        this.log('deploy', `${ctx.domains.length} domain(s) assigned — Traefik handles routing (no host ports published)`);
+        this.log(deploymentId, 'deploy', `${ctx.domains.length} domain(s) assigned — Traefik handles routing (no host ports published)`);
       }
 
       await swarm.createService({
@@ -984,7 +993,7 @@ export class DeploymentEngine {
               const hostPort = p.host || p.container;
               if (hostPort <= 0 || hostPort > 65535 || p.container <= 0 || p.container > 65535) return false;
               if (RESERVED_PORTS.has(hostPort)) {
-                this.log('deploy', `Skipping reserved port ${hostPort} (used by platform)`, 'error');
+                this.log(deploymentId, 'deploy', `Skipping reserved port ${hostPort} (used by platform)`, 'error');
                 return false;
               }
               return true;
@@ -1000,7 +1009,7 @@ export class DeploymentEngine {
           'click-deploy.service-id': ctx.service.id,
           'click-deploy.deployment-id': deploymentId,
           // Add Traefik routing labels based on assigned domains
-          ...this.buildTraefikLabels(ctx, serviceName),
+          ...this.buildTraefikLabels(deploymentId, ctx, serviceName),
         },
         healthCheck: ctx.service.healthCheck
           ? {
@@ -1027,7 +1036,7 @@ export class DeploymentEngine {
       }
     }
 
-    this.log('deploy', `Service ${serviceName} deployed`, 'success');
+    this.log(deploymentId, 'deploy', `Service ${serviceName} deployed`, 'success');
   }
 
   private getSwarmServiceName(service: DeploymentContext['service']): string {
@@ -1040,9 +1049,10 @@ export class DeploymentEngine {
     return `${registryPrefix}${ctx.service.name}`.toLowerCase().replace(/[^a-z0-9/:.-]/g, '-');
   }
 
-  private logsToText(): string {
-    return this.logs
-      .map((l) => `[${l.timestamp.toISOString()}] [${l.step}] ${l.message}`)
+  private logsToText(deploymentId: string): string {
+    const logs = this.deploymentLogs.get(deploymentId) || [];
+    return logs
+      .map((l: DeploymentLog) => `[${l.timestamp.toISOString()}] [${l.step}] ${l.message}`)
       .join('\n');
   }
 
@@ -1051,6 +1061,7 @@ export class DeploymentEngine {
    * If no domains are assigned, returns empty (service won't be exposed via Traefik).
    */
   private buildTraefikLabels(
+    deploymentId: string,
     ctx: DeploymentContext,
     serviceName: string
   ): Record<string, string> {
@@ -1066,7 +1077,7 @@ export class DeploymentEngine {
       sslProvider: d.sslProvider as any,
     }));
 
-    this.log('traefik', `Configuring ${routes.length} domain(s): ${ctx.domains.map(d => d.hostname).join(', ')}`);
+    this.log(deploymentId, 'traefik', `Configuring ${routes.length} domain(s): ${ctx.domains.map(d => d.hostname).join(', ')}`);
 
     return generateTraefikLabels(serviceName, routes);
   }

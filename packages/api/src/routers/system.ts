@@ -197,8 +197,23 @@ export const systemRouter = createRouter({
       };
 
       try {
-        // Run the update detached so it survives the container stopping
-        const command = `nohup sh -c 'cd /opt/click-deploy && git pull origin main && GIT_COMMIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build' > /opt/click-deploy/update.log 2>&1 &`;
+        // Run the update detached so it survives the container stopping.
+        // We write GIT_COMMIT_SHA into .env so docker compose build args pick it up.
+        const command = [
+          "nohup sh -c '",
+          'cd /opt/click-deploy',
+          '&& : > update.log',
+          '&& echo "[update] Pulling latest code..." >> update.log',
+          '&& git pull origin main >> update.log 2>&1',
+          '&& SHA=$(git rev-parse --short HEAD)',
+          '&& sed -i "/^GIT_COMMIT_SHA=/d" .env',
+          '&& echo "GIT_COMMIT_SHA=$SHA" >> .env',
+          '&& echo "[update] Building with commit $SHA..." >> update.log',
+          '&& GIT_COMMIT_SHA=$SHA docker compose up -d --build >> update.log 2>&1',
+          '&& echo "[update] ✓ Update complete!" >> update.log',
+          "|| echo '[update] ✗ Update failed!' >> update.log",
+          "' > /dev/null 2>&1 &",
+        ].join(' ');
         await sshManager.exec(sshConfig, command);
         
         return { success: true };
@@ -433,7 +448,7 @@ export const systemRouter = createRouter({
       name: z.string().min(1).max(100),
     }))
     .mutation(async ({ ctx, input }) => {
-      const { createHash } = await import('crypto');
+      const { createHash } = await import('node:crypto');
 
       // Generate a random key with cd_ prefix
       const rawKey = `cd_${randomBytes(24).toString('hex')}`;
