@@ -58,6 +58,8 @@ export const nodes = pgTable('nodes', {
   canBuild: boolean('can_build').notNull().default(true),
   /** Whether this node can be used for deploying/running services */
   canDeploy: boolean('can_deploy').notNull().default(true),
+  hasTailscale: boolean('has_tailscale').notNull().default(false),
+  tailscaleIp: varchar('tailscale_ip', { length: 50 }),
   lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
   status: nodeStatusEnum('status').notNull().default('offline'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

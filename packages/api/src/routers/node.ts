@@ -457,6 +457,8 @@ export const nodeRouter = createRouter({
           status: 'online',
           dockerVersion: result.dockerVersion,
           runtimeType: result.runtimeType || 'host',
+          hasTailscale: result.hasTailscale || false,
+          tailscaleIp: result.tailscaleIp || null,
           resources: {
             cpuCores: result.cpuCores,
             memoryTotal: result.memoryTotal,

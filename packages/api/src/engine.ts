@@ -498,6 +498,8 @@ export class DeploymentEngine {
     error?: string;
     /** 'host' or 'container' — detected automatically */
     runtimeType?: string;
+    hasTailscale?: boolean;
+    tailscaleIp?: string;
   }> {
     try {
       const sshConfig = {
@@ -533,6 +535,8 @@ export class DeploymentEngine {
       let memoryTotal: number | undefined;
       let diskTotal: number | undefined;
       let runtimeType = 'host';
+      let hasTailscale = false;
+      let tailscaleIp: string | undefined;
 
       if (isWindows) {
         // ── Windows (OpenSSH / WSL boundary) ──────────────
@@ -561,6 +565,14 @@ export class DeploymentEngine {
           'powershell -Command "if ((Get-CimInstance Win32_ComputerSystem).Model -match \'Virtual\') { echo \'container\' } else { echo \'host\' }"'
         );
         runtimeType = hyperVCheck.stdout.trim() || 'host';
+
+        // Tailscale Windows fallback check
+        const tsWinCheck = await sshManager.exec(sshConfig, 'tailscale ip -4');
+        const tsWinOut = tsWinCheck.stdout.trim();
+        if (tsWinCheck.code === 0 && tsWinOut.startsWith('100.')) {
+           hasTailscale = true;
+           tailscaleIp = tsWinOut;
+        }
       } else {
         // ── Unix/Linux/macOS (works on Alpine, Busybox, Debian, RHEL, macOS, LXC) ──
         const osInfo = await sshManager.exec(sshConfig,
@@ -588,6 +600,11 @@ export class DeploymentEngine {
           "cat /proc/1/cgroup 2>/dev/null | grep -qE 'docker|lxc|kubepods' && echo 'container' || echo 'host'"
         );
         runtimeType = containerCheck.stdout.trim() || 'host';
+
+        const tsCheck = await sshManager.exec(sshConfig, 'tailscale ip -4 2>/dev/null');
+        const tsOut = tsCheck.stdout.trim();
+        hasTailscale = tsCheck.code === 0 && tsOut.startsWith('100.');
+        tailscaleIp = hasTailscale ? tsOut : undefined;
       }
 
       return {
@@ -598,6 +615,8 @@ export class DeploymentEngine {
         memoryTotal,
         diskTotal,
         runtimeType,
+        hasTailscale,
+        tailscaleIp,
       };
     } catch (err) {
       return {
