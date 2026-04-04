@@ -1,0 +1,347 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,200..1000;1,6..12,200..1000&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@100..800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Nunito Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-heading: 'Sora', sans-serif;
+
+  /* Dynamically mapped to light/dark mode variables */
+  --color-brand-400: color-mix(in srgb, var(--brand) 80%, white);
+  --color-brand-500: var(--brand); /* Primary: Cyan #1FBBD2 */
+  --color-brand-600: color-mix(in srgb, var(--brand) 75%, black);
+
+  --color-accent-400: color-mix(in srgb, var(--accent) 80%, white);
+  --color-accent-500: var(--accent); /* Secondary: Orange #F39C12 */
+  --color-accent-600: color-mix(in srgb, var(--accent) 75%, black);
+
+  /* Semantic UI Colors */
+  --color-bg-base: var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-text-base: var(--text-base);
+  --color-text-muted: var(--text-muted);
+  --color-border-subtle: var(--border-subtle);
+
+  /* Success */
+  --color-success-400: oklch(0.78 0.16 155);
+  --color-success-500: oklch(0.68 0.19 155);
+
+  /* Warning */
+  --color-warning-400: oklch(0.82 0.14 80);
+  --color-warning-500: oklch(0.74 0.17 80);
+
+  /* Danger / Error */
+  --color-danger-400: oklch(0.72 0.18 25);
+  --color-danger-500: oklch(0.62 0.22 25);
+
+  /* Overrides for hardcoded classes to adapt automatically */
+  --color-white: var(--fg-white);
+  --color-black: var(--bg-black);
+}
+
+/* ── CSS Custom Properties for theming ────────────────── */
+:root {
+  --radius: 0.75rem;
+
+  /* LIGHT MODE (Neumorphic) */
+  --bg-base: #e6e9ef;
+  --bg-surface: #e6e9ef;
+  --text-base: #4a5568;
+  --text-muted: #718096;
+  --border-subtle: transparent;
+  
+  --brand: #1FBBD2; /* Cyan */
+  --accent: #F39C12; /* Orange */
+  
+  --glass-bg: #e6e9ef;
+  --glass-border: transparent;
+  --glass-shadow: 6px 6px 12px #c4c6cc, -6px -6px 12px #ffffff;
+  --glass-shadow-hover: 8px 8px 16px #c4c6cc, -8px -8px 16px #ffffff;
+  --glass-shadow-inset: inset 4px 4px 8px #c4c6cc, inset -4px -4px 8px #ffffff;
+
+  --btn-secondary-bg: #e6e9ef;
+  --btn-secondary-hover: #e6e9ef;
+
+  /* Mapped so text-white behaves as dark gray in light mode */
+  --fg-white: #2a2d32;
+  --bg-black: #cbd5e1;
+}
+
+.dark {
+  /* DARK MODE (Neumorphic) */
+  --bg-base: #2a2d32;
+  --bg-surface: #2a2d32;
+  --text-base: #e2e8f0;
+  --text-muted: #a0aec0;
+  --border-subtle: transparent;
+
+  --brand: #1FBBD2; /* Cyan */
+  --accent: #F39C12; /* Orange */
+
+  --glass-bg: #2a2d32;
+  --glass-border: transparent;
+  --glass-shadow: 6px 6px 12px #1c1e22, -6px -6px 12px #383c42;
+  --glass-shadow-hover: 8px 8px 16px #1c1e22, -8px -8px 16px #383c42;
+  --glass-shadow-inset: inset 4px 4px 8px #1c1e22, inset -4px -4px 8px #383c42;
+
+  --btn-secondary-bg: #2a2d32;
+  --btn-secondary-hover: #2a2d32;
+
+  --fg-white: #ffffff;
+  --bg-black: #000000;
+}
+
+/* ── Base layer ───────────────────────────────────────── */
+@layer base {
+  * {
+    border-color: var(--border-subtle);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg-base);
+    color: var(--text-base);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--brand) 30%, transparent);
+    color: var(--text-base);
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--bg-base);
+    box-shadow: var(--glass-shadow-inset);
+    border-radius: 4px;
+    margin: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--text-muted);
+    box-shadow: var(--glass-shadow);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--brand);
+  }
+}
+
+/* ── Component layer ──────────────────────────────────── */
+@layer components {
+  /* Glass card -> Neumorphic card */
+  .glass-card {
+    background: var(--glass-bg);
+    border: none;
+    border-radius: var(--radius);
+    box-shadow: var(--glass-shadow);
+    transition: all 0.3s ease;
+  }
+
+  .glass-card-hover {
+    transition: all 0.2s ease;
+  }
+
+  .glass-card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--glass-shadow-hover);
+  }
+
+  /* Sidebar */
+  .sidebar {
+    background: var(--bg-surface);
+    border-right: none;
+    box-shadow: 8px 0 16px rgba(0, 0, 0, 0.03);
+    z-index: 10;
+  }
+
+  .dark .sidebar {
+    box-shadow: 8px 0 16px rgba(0, 0, 0, 0.2);
+  }
+
+  .sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 0.875rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    transition: all 0.2s ease;
+    cursor: pointer;
+    background: var(--bg-base);
+    border: none;
+    margin-bottom: 0.25rem;
+  }
+
+  .sidebar-item:hover {
+    color: var(--text-base);
+    box-shadow: var(--glass-shadow);
+  }
+
+  .sidebar-item.active {
+    color: var(--brand);
+    box-shadow: var(--glass-shadow-inset);
+  }
+
+  /* Status indicators */
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+    box-shadow: var(--glass-shadow);
+  }
+
+  .status-running {
+    background: var(--color-success-400);
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  .status-stopped {
+    background: var(--text-muted);
+    box-shadow: var(--glass-shadow-inset);
+  }
+
+  .status-deploying {
+    background: var(--accent);
+    animation: pulse-glow 1s ease-in-out infinite;
+  }
+
+  .status-failed {
+    background: var(--color-danger-400);
+  }
+
+  /* Buttons */
+  .btn-primary {
+    background: var(--bg-base);
+    color: var(--brand); 
+    font-weight: 700;
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+    border: none;
+    cursor: pointer;
+    box-shadow: var(--glass-shadow);
+  }
+
+  .btn-primary:hover {
+    box-shadow: var(--glass-shadow-hover);
+    transform: translateY(-1px);
+    color: var(--color-brand-500);
+  }
+
+  .btn-primary:active {
+    box-shadow: var(--glass-shadow-inset);
+    transform: translateY(1px);
+  }
+
+  .btn-secondary {
+    background: var(--btn-secondary-bg);
+    color: var(--text-base);
+    font-weight: 600;
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+    border: none;
+    cursor: pointer;
+    box-shadow: var(--glass-shadow);
+  }
+
+  .btn-secondary:hover {
+    box-shadow: var(--glass-shadow-hover);
+    color: var(--text-base);
+  }
+
+  .btn-secondary:active {
+    box-shadow: var(--glass-shadow-inset);
+  }
+
+  /* Metric cards */
+  .metric-card {
+    background: var(--bg-surface);
+    border: none;
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    transition: all 0.3s ease;
+    box-shadow: var(--glass-shadow);
+  }
+
+  .metric-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-base);
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.05);
+  }
+  
+  .dark .metric-value {
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+  }
+
+  .metric-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+  }
+
+  /* Input fields */
+  .input-field {
+    background: var(--bg-base);
+    border: none;
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    color: var(--text-base);
+    width: 100%;
+    transition: all 0.2s ease;
+    outline: none;
+    box-shadow: var(--glass-shadow-inset);
+  }
+
+  .input-field::placeholder {
+    color: var(--text-muted);
+  }
+
+  .input-field:focus {
+    box-shadow: var(--glass-shadow-inset), 0 0 0 2px color-mix(in srgb, var(--brand) 30%, transparent);
+  }
+}
+
+/* ── Animations ───────────────────────────────────────── */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-in-right { animation: slide-in-right 0.25s ease-out forwards; }
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}

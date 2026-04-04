@@ -1,0 +1,23 @@
+{
+  "name": "@click-deploy/docker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@click-deploy/database": "workspace:*",
+    "@click-deploy/shared": "workspace:*",
+    "dockerode": "^4.0.0",
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^3.3.0",
+    "@types/node": "^22",
+    "@types/ssh2": "^1.15.0",
+    "typescript": "^5.7.0"
+  }
+}

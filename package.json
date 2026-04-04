@@ -1,0 +1,23 @@
+{
+  "name": "click-deploy",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "db:generate": "pnpm --filter @click-deploy/database generate",
+    "db:migrate": "pnpm --filter @click-deploy/database migrate",
+    "db:push": "pnpm --filter @click-deploy/database push",
+    "db:studio": "pnpm --filter @click-deploy/database studio"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "nodemailer": "^8.0.4"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^7.0.11"
+  }
+}

@@ -1,0 +1,366 @@
+// ============================================================
+// Click-Deploy — System Router (Platform Administration)
+// ============================================================
+import { z } from 'zod';
+import { eq, and } from 'drizzle-orm';
+import { nodes, sshKeys, organizations, users } from '@click-deploy/database';
+import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
+import { sshManager } from '@click-deploy/docker';
+import { decryptPrivateKey } from '../crypto';
+import { randomBytes } from 'crypto';
+
+// ── SMTP helper ─────────────────────────────────────────────
+async function sendEmail(smtpConfig: any, to: string, subject: string, html: string) {
+  // Dynamic import to avoid bundling issues
+  const nodemailer = await import('nodemailer');
+  const transport = nodemailer.createTransport({
+    host: smtpConfig.host,
+    port: Number(smtpConfig.port) || 587,
+    secure: Number(smtpConfig.port) === 465,
+    auth: {
+      user: smtpConfig.user,
+      pass: smtpConfig.password,
+    },
+  });
+  await transport.sendMail({
+    from: smtpConfig.from || smtpConfig.user,
+    to,
+    subject,
+    html,
+  });
+}
+
+export const systemRouter = createRouter({
+  /** Get the current user's profile (bypasses session cache) */
+  getProfile: protectedProcedure
+    .query(async ({ ctx }) => {
+      const user = await ctx.db.query.users.findFirst({
+        where: eq(users.id, ctx.session.userId),
+        columns: { id: true, name: true, email: true, image: true },
+      });
+      return user || null;
+    }),
+
+  /** Update the current user's profile (name, email, image) */
+  updateProfile: protectedProcedure
+    .input(z.object({
+      name: z.string().min(1).max(100),
+      email: z.string().email().optional(),
+      image: z.string().max(200_000).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.update(users).set({
+        name: input.name,
+        ...(input.email ? { email: input.email } : {}),
+        ...(input.image !== undefined ? { image: input.image } : {}),
+      }).where(eq(users.id, ctx.session.userId));
+      return { success: true, name: input.name, email: input.email, image: input.image };
+    }),
+
+  /** Change the current user's password (direct DB — bypasses Better-Auth client) */
+  changePassword: protectedProcedure
+    .input(z.object({
+      currentPassword: z.string().min(1),
+      newPassword: z.string().min(8),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { accounts } = await import('@click-deploy/database');
+
+      // Find the credential account for this user
+      const account = await ctx.db.query.accounts.findFirst({
+        where: and(
+          eq(accounts.userId, ctx.session.userId),
+          eq(accounts.providerId, 'credential'),
+        ),
+      });
+
+      if (!account?.password) {
+        throw new Error('No password credential found for this account');
+      }
+
+      // Verify current password
+      const bcrypt = await import('bcryptjs');
+      const valid = await bcrypt.compare(input.currentPassword, account.password);
+      if (!valid) {
+        throw new Error('Current password is incorrect');
+      }
+
+      // Hash new password and update
+      const hashed = await bcrypt.hash(input.newPassword, 10);
+      await ctx.db.update(accounts)
+        .set({ password: hashed, updatedAt: new Date() })
+        .where(eq(accounts.id, account.id));
+
+      return { success: true };
+    }),
+
+  /** Check if there are updates available on the remote repository */
+  checkUpdate: adminProcedure
+    .query(async ({ ctx }) => {
+      const orgNodes = await ctx.db.query.nodes.findMany({
+        where: eq(nodes.organizationId, ctx.session.organizationId),
+      });
+
+      const managerNode = orgNodes.find(n => n.role === 'manager');
+      if (!managerNode) {
+        return { updateAvailable: false, error: 'No manager node configured', commits: [] };
+      }
+
+      const keyRecord = await ctx.db.query.sshKeys.findFirst({
+        where: eq(sshKeys.id, managerNode.sshKeyId),
+      });
+      if (!keyRecord) {
+        return { updateAvailable: false, error: 'SSH key missing for manager node', commits: [] };
+      }
+
+      const sshConfig = {
+        host: managerNode.host,
+        port: managerNode.port,
+        username: managerNode.sshUser,
+        privateKey: decryptPrivateKey(keyRecord.privateKey),
+      };
+
+      try {
+        const dirCheck = await sshManager.exec(sshConfig, 'test -d /opt/click-deploy && echo "exists" || echo "missing"');
+        if (dirCheck.stdout.trim() !== 'exists') {
+          return { updateAvailable: false, error: 'Installation directory not found on host', commits: [] };
+        }
+
+        await sshManager.exec(sshConfig, 'cd /opt/click-deploy && git fetch origin');
+        
+        const gitLog = await sshManager.exec(sshConfig, 'cd /opt/click-deploy && git log HEAD..origin/main --oneline');
+
+        const commits = gitLog.stdout
+          .split('\n')
+          .map((line: string) => line.trim())
+          .filter((line: string) => line.length > 0);
+
+        return {
+          updateAvailable: commits.length > 0,
+          commits,
+        };
+      } catch (err: any) {
+        console.error('[system] Failed to check for updates:', err);
+        return { updateAvailable: false, error: err.message || 'SSH Connection failed', commits: [] };
+      }
+    }),
+
+  /** Trigger an asynchronous update of the host machine */
+  triggerUpdate: adminProcedure
+    .mutation(async ({ ctx }) => {
+      const orgNodes = await ctx.db.query.nodes.findMany({
+        where: eq(nodes.organizationId, ctx.session.organizationId),
+      });
+
+      const managerNode = orgNodes.find(n => n.role === 'manager');
+      if (!managerNode) {
+        throw new Error('No manager node configured for this organization');
+      }
+
+      const keyRecord = await ctx.db.query.sshKeys.findFirst({
+        where: eq(sshKeys.id, managerNode.sshKeyId),
+      });
+      if (!keyRecord) {
+        throw new Error('SSH key missing for manager node');
+      }
+
+      const sshConfig = {
+        host: managerNode.host,
+        port: managerNode.port,
+        username: managerNode.sshUser,
+        privateKey: decryptPrivateKey(keyRecord.privateKey),
+      };
+
+      try {
+        // Run the update detached so it survives the container stopping
+        const command = `nohup sh -c 'cd /opt/click-deploy && git pull origin main && docker compose up -d --build' > /opt/click-deploy/update.log 2>&1 &`;
+        await sshManager.exec(sshConfig, command);
+        
+        return { success: true };
+      } catch (err: any) {
+        console.error('[system] Failed to trigger update:', err);
+        throw new Error('Failed to start update script: ' + (err.message || 'SSH error'));
+      }
+    }),
+
+  // ── SMTP Config ─────────────────────────────────────────────
+
+  /** Get SMTP settings for this organization */
+  getSmtp: adminProcedure
+    .query(async ({ ctx }) => {
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+      });
+      const settings = (org?.settings as any) || {};
+      return {
+        host: settings.smtpHost || '',
+        port: settings.smtpPort || '587',
+        user: settings.smtpUser || '',
+        password: settings.smtpPassword ? '••••••••' : '',
+        from: settings.smtpFrom || '',
+        configured: !!(settings.smtpHost && settings.smtpUser && settings.smtpPassword),
+      };
+    }),
+
+  /** Save SMTP settings */
+  saveSmtp: adminProcedure
+    .input(z.object({
+      host: z.string().min(1),
+      port: z.string().default('587'),
+      user: z.string().min(1),
+      password: z.string().min(1),
+      from: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+      });
+      const existing = (org?.settings as any) || {};
+      
+      await ctx.db.update(organizations)
+        .set({
+          settings: {
+            ...existing,
+            smtpHost: input.host,
+            smtpPort: input.port,
+            smtpUser: input.user,
+            smtpPassword: input.password,
+            smtpFrom: input.from || input.user,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(organizations.id, ctx.session.organizationId));
+
+      return { success: true };
+    }),
+
+  /** Test SMTP connection */
+  testSmtp: adminProcedure
+    .input(z.object({
+      host: z.string(),
+      port: z.string(),
+      user: z.string(),
+      password: z.string(),
+      from: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const userRecord = await ctx.db.query.users.findFirst({
+          where: eq(users.id, ctx.session.userId),
+        });
+        await sendEmail(
+          { host: input.host, port: input.port, user: input.user, password: input.password, from: input.from || input.user },
+          userRecord?.email || input.user,
+          'Click-Deploy SMTP Test',
+          '<h2>✓ SMTP is working!</h2><p>This is a test email from your Click-Deploy platform.</p>'
+        );
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    }),
+
+  // ── Team Invitations ────────────────────────────────────────
+
+  /** Invite a member by email — generates link, optionally sends email */
+  inviteMember: adminProcedure
+    .input(z.object({
+      email: z.string().email(),
+      role: z.enum(['admin', 'member', 'viewer']).default('member'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Generate unique invite token
+      const token = randomBytes(32).toString('hex');
+      
+      // Store invite in org settings
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+      });
+      const settings = (org?.settings as any) || {};
+      const invites = settings.pendingInvites || [];
+      
+      // Check for duplicate
+      const existing = invites.find((i: any) => i.email === input.email);
+      if (existing) {
+        return { success: false, error: 'This email has already been invited' };
+      }
+
+      invites.push({
+        email: input.email,
+        role: input.role,
+        token,
+        invitedAt: new Date().toISOString(),
+        invitedBy: ctx.session.userId,
+      });
+
+      await ctx.db.update(organizations)
+        .set({ settings: { ...settings, pendingInvites: invites }, updatedAt: new Date() })
+        .where(eq(organizations.id, ctx.session.organizationId));
+
+      // Try to send email if SMTP is configured
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      const inviteLink = `${baseUrl}/register?invite=${token}&org=${ctx.session.organizationId}`;
+      let emailSent = false;
+
+      if (settings.smtpHost && settings.smtpUser && settings.smtpPassword) {
+        try {
+          await sendEmail(
+            { host: settings.smtpHost, port: settings.smtpPort, user: settings.smtpUser, password: settings.smtpPassword, from: settings.smtpFrom },
+            input.email,
+            `You've been invited to ${org?.name || 'Click-Deploy'}`,
+            `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;">
+              <h2>You're invited!</h2>
+              <p>You've been invited to join <strong>${org?.name}</strong> on Click-Deploy as a <strong>${input.role}</strong>.</p>
+              <p style="margin:24px 0;">
+                <a href="${inviteLink}" style="background:#6366f1;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;">Accept Invitation</a>
+              </p>
+              <p style="color:#666;font-size:12px;">Or copy this link: ${inviteLink}</p>
+            </div>`
+          );
+          emailSent = true;
+        } catch (err) {
+          console.error('[system] Failed to send invite email:', err);
+        }
+      }
+
+      return { success: true, inviteLink, emailSent };
+    }),
+
+  /** List team members and pending invites */
+  getTeam: protectedProcedure
+    .query(async ({ ctx }) => {
+      const members = await ctx.db.query.users.findMany({
+        where: eq(users.organizationId, ctx.session.organizationId),
+        columns: { id: true, name: true, email: true, role: true, image: true, createdAt: true },
+      });
+
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+      });
+      const settings = (org?.settings as any) || {};
+      const pendingInvites = (settings.pendingInvites || []).map((inv: any) => ({
+        email: inv.email,
+        role: inv.role,
+        invitedAt: inv.invitedAt,
+      }));
+
+      return { members, pendingInvites };
+    }),
+
+  /** Cancel a pending invite */
+  cancelInvite: adminProcedure
+    .input(z.object({ email: z.string().email() }))
+    .mutation(async ({ ctx, input }) => {
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+      });
+      const settings = (org?.settings as any) || {};
+      const invites = (settings.pendingInvites || []).filter((i: any) => i.email !== input.email);
+
+      await ctx.db.update(organizations)
+        .set({ settings: { ...settings, pendingInvites: invites }, updatedAt: new Date() })
+        .where(eq(organizations.id, ctx.session.organizationId));
+
+      return { success: true };
+    }),
+});

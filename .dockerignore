@@ -1,0 +1,12 @@
+node_modules
+.next
+.turbo
+.git
+.gitignore
+*.md
+.env*
+!.env.example
+.DS_Store
+docker-compose*.yml
+Dockerfile
+install.sh

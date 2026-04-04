@@ -1,0 +1,412 @@
+// ============================================================
+// Click-Deploy — Service Router
+// ============================================================
+import { z } from 'zod';
+import { eq, and, desc } from 'drizzle-orm';
+import { services, projects, nodes } from '@click-deploy/database';
+import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
+
+const serviceInput = z.object({
+  name: z.string().min(1).max(100),
+  projectId: z.string().uuid(),
+  type: z.enum(['application', 'database', 'compose', 'redis', 'postgres', 'mysql', 'mongo', 'mariadb']).default('application'),
+  sourceType: z.enum(['git', 'image', 'compose']),
+
+  // Git source
+  gitUrl: z.string().url().optional(),
+  gitBranch: z.string().max(255).default('main'),
+  gitProvider: z.enum(['github', 'gitlab', 'gitea', 'bitbucket']).optional(),
+
+  // Dockerfile
+  dockerfilePath: z.string().max(500).default('Dockerfile'),
+  dockerContext: z.string().max(500).default('.'),
+
+  // Image source
+  imageName: z.string().max(500).optional(),
+  imageTag: z.string().max(255).default('latest'),
+
+  // Compose
+  composeFile: z.string().optional(),
+
+  // Node placement
+  buildNodeId: z.string().uuid().optional(),
+  targetNodeId: z.string().uuid().optional(), // Legacy single-node
+  deployNodeIds: z.array(z.string().uuid()).default([]),
+
+  // Config
+  replicasPerNode: z.number().int().min(1).max(10).default(1),
+  replicas: z.number().int().min(0).max(100).default(1),
+  envVars: z.record(z.string()).default({}),
+  ports: z.array(z.object({
+    host: z.number().int().min(1).max(65535).optional(),
+    container: z.number().int().min(1).max(65535),
+    protocol: z.enum(['tcp', 'udp']).default('tcp'),
+  })).default([]),
+  volumes: z.array(z.object({
+    hostPath: z.string().optional(),
+    containerPath: z.string(),
+    readOnly: z.boolean().default(false),
+  })).default([]),
+  healthCheck: z.object({
+    path: z.string().default('/'),
+    interval: z.number().int().default(30),
+    timeout: z.number().int().default(10),
+    retries: z.number().int().default(3),
+    startPeriod: z.number().int().default(30),
+  }).optional(),
+  resourceLimits: z.object({
+    cpuLimit: z.number().optional(),
+    memoryLimit: z.string().optional(), // e.g. "512m", "2g"
+    cpuReservation: z.number().optional(),
+    memoryReservation: z.string().optional(),
+  }).optional(),
+  labels: z.record(z.string()).default({}),
+  autoDeploy: z.boolean().default(true),
+});
+
+export const serviceRouter = createRouter({
+  /** List services for a project */
+  listByProject: protectedProcedure
+    .input(z.object({ projectId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Verify project belongs to org
+      const project = await ctx.db.query.projects.findFirst({
+        where: and(
+          eq(projects.id, input.projectId),
+          eq(projects.organizationId, ctx.session.organizationId)
+        ),
+      });
+
+      if (!project) {
+        throw new Error('Project not found');
+      }
+
+      return ctx.db.query.services.findMany({
+        where: eq(services.projectId, input.projectId),
+        orderBy: [desc(services.updatedAt)],
+      });
+    }),
+
+  /** Get a single service with full details */
+  byId: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const service = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.id),
+        with: {
+          project: true,
+        },
+      });
+
+      if (!service || service.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+
+      return service;
+    }),
+
+  /** Create a new service */
+  create: protectedProcedure
+    .input(serviceInput)
+    .mutation(async ({ ctx, input }) => {
+      // Verify project belongs to org
+      const project = await ctx.db.query.projects.findFirst({
+        where: and(
+          eq(projects.id, input.projectId),
+          eq(projects.organizationId, ctx.session.organizationId)
+        ),
+      });
+
+      if (!project) {
+        throw new Error('Project not found');
+      }
+
+      let { buildNodeId, targetNodeId, deployNodeIds, replicasPerNode } = input;
+      const perNode = replicasPerNode ?? 1;
+
+      // Fetch org nodes
+      const orgNodes = await ctx.db.query.nodes.findMany({
+        where: eq(nodes.organizationId, ctx.session.organizationId),
+      });
+
+      // If no deploy nodes selected, auto-assign all deploy-capable nodes
+      if (!deployNodeIds || deployNodeIds.length === 0) {
+        deployNodeIds = orgNodes
+          .filter(n => n.canDeploy)
+          .map(n => n.id);
+        // Fallback: at least use the first node
+        if (deployNodeIds.length === 0 && orgNodes.length > 0) {
+          deployNodeIds = [orgNodes[0]!.id];
+        }
+      }
+
+      // Set targetNodeId to first deploy node for backward compat
+      if (!targetNodeId && deployNodeIds.length > 0) {
+        targetNodeId = deployNodeIds[0];
+      }
+
+      // Auto-assign build node
+      if (!buildNodeId && orgNodes.length > 0) {
+        const buildNode = orgNodes.find(n => n.canBuild) || orgNodes[0];
+        if (buildNode) buildNodeId = buildNode.id;
+      }
+
+      // Auto-calculate replicas: nodes × replicas_per_node
+      const replicas = deployNodeIds.length * perNode;
+
+      // Strip non-DB fields before insert
+      const { replicasPerNode: _rpn, deployNodeIds: _dni, ...dbInput } = input;
+
+      const [service] = await ctx.db
+        .insert(services)
+        .values({
+          ...dbInput,
+          buildNodeId,
+          targetNodeId,
+          deployNodeIds,
+          replicas,
+        })
+        .returning();
+
+      return service;
+    }),
+
+  /** Update a service */
+  update: protectedProcedure
+    .input(
+      z.object({ id: z.string().uuid() }).merge(serviceInput.partial().omit({ projectId: true }))
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, replicasPerNode, ...data } = input;
+
+      // Verify ownership
+      const existing = await ctx.db.query.services.findFirst({
+        where: eq(services.id, id),
+        with: { project: true },
+      });
+
+      if (!existing || existing.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+
+      const [updated] = await ctx.db
+        .update(services)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(services.id, id))
+        .returning();
+
+      return updated;
+    }),
+
+  /** Delete a service */
+  delete: adminProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.id),
+        with: { project: true },
+      });
+
+      if (!existing || existing.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+
+      // TODO: Stop and remove Docker service before deleting record
+      await ctx.db.delete(services).where(eq(services.id, input.id));
+
+      return { success: true };
+    }),
+
+  /** Restart/reload a service — force-update containers without rebuilding */
+  restart: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const service = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.id),
+        with: { project: true },
+      });
+
+      if (!service || service.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+
+      if (!service.swarmServiceId) {
+        throw new Error('Service has no active deployment to restart');
+      }
+
+      // Get manager node to execute swarm commands
+      const { sshKeys, nodes: nodesTable } = await import('@click-deploy/database');
+      const { sshManager } = await import('@click-deploy/docker');
+      const { decryptPrivateKey } = await import('../crypto');
+
+      const managerNode = await ctx.db.query.nodes.findFirst({
+        where: and(
+          eq(nodesTable.organizationId, ctx.session.organizationId),
+          eq(nodesTable.role, 'manager'),
+          eq(nodesTable.status, 'online'),
+        ),
+        with: { sshKey: true },
+      });
+
+      if (!managerNode?.sshKey) {
+        throw new Error('No online manager node found');
+      }
+
+      const sshConfig = {
+        host: managerNode.host,
+        port: managerNode.port,
+        username: managerNode.sshUser,
+        privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+      };
+
+      // Build env args from current service config
+      const envVars = (service.envVars as Record<string, string>) || {};
+      const envArgs = Object.entries(envVars)
+        .map(([k, v]) => `--env-add "${k}=${v}"`)
+        .join(' ');
+
+      // Determine swarm service name
+      const serviceName = `${service.project.name}-${service.name}`
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, '-')
+        .replace(/-+/g, '-');
+
+      const cmd = `docker service update --force ${envArgs} ${serviceName}`;
+      const result = await sshManager.exec(sshConfig, cmd);
+
+      if (result.code !== 0) {
+        throw new Error(`Restart failed: ${result.stderr}`);
+      }
+
+      return { success: true, message: 'Service restarting with updated configuration' };
+    }),
+
+  /** Stop a service — scale to 0 replicas */
+  stop: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const service = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.id),
+        with: { project: true },
+      });
+      if (!service || service.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+      if (!service.swarmServiceId) throw new Error('No active deployment');
+
+      const { nodes: nodesTable } = await import('@click-deploy/database');
+      const { sshManager } = await import('@click-deploy/docker');
+      const { decryptPrivateKey } = await import('../crypto');
+
+      const managerNode = await ctx.db.query.nodes.findFirst({
+        where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
+        with: { sshKey: true },
+      });
+      if (!managerNode?.sshKey) throw new Error('No online manager node');
+
+      const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const serviceName = `${service.project.name}-${service.name}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+
+      const result = await sshManager.exec(sshConfig, `docker service scale ${serviceName}=0`);
+      if (result.code !== 0) throw new Error(`Stop failed: ${result.stderr}`);
+
+      await ctx.db.update(services).set({ status: 'stopped', updatedAt: new Date() }).where(eq(services.id, input.id));
+      return { success: true };
+    }),
+
+  /** Start a stopped service — scale back to configured replicas */
+  start: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const service = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.id),
+        with: { project: true },
+      });
+      if (!service || service.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+      if (!service.swarmServiceId) throw new Error('No active deployment');
+
+      const { nodes: nodesTable } = await import('@click-deploy/database');
+      const { sshManager } = await import('@click-deploy/docker');
+      const { decryptPrivateKey } = await import('../crypto');
+
+      const managerNode = await ctx.db.query.nodes.findFirst({
+        where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
+        with: { sshKey: true },
+      });
+      if (!managerNode?.sshKey) throw new Error('No online manager node');
+
+      const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const serviceName = `${service.project.name}-${service.name}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+      const replicas = service.replicas || 1;
+
+      const result = await sshManager.exec(sshConfig, `docker service scale ${serviceName}=${replicas}`);
+      if (result.code !== 0) throw new Error(`Start failed: ${result.stderr}`);
+
+      await ctx.db.update(services).set({ status: 'running', updatedAt: new Date() }).where(eq(services.id, input.id));
+      return { success: true };
+    }),
+
+  /** Rebuild — redeploy using existing code (no git pull) */
+  rebuild: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const service = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.id),
+        with: { project: true },
+      });
+      if (!service || service.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+
+      // Create a new deployment
+      const { deployments } = await import('@click-deploy/database');
+      const [deployment] = await ctx.db.insert(deployments).values({
+        serviceId: service.id,
+        buildStatus: 'pending',
+        deployStatus: 'pending',
+        commitSha: 'rebuild',
+        commitMessage: 'Manual rebuild',
+        triggeredBy: 'manual',
+        buildNodeId: service.buildNodeId,
+        deployNodeId: service.targetNodeId,
+      }).returning();
+
+      // Fire the engine asynchronously
+      const { deploymentEngine } = await import('../engine');
+      deploymentEngine.runDeployment(deployment!.id).catch(console.error);
+
+      return { success: true, deploymentId: deployment!.id };
+    }),
+
+  /** Get live logs for a running service */
+  logs: protectedProcedure
+    .input(z.object({ id: z.string().uuid(), tail: z.number().int().min(10).max(500).default(100) }))
+    .query(async ({ ctx, input }) => {
+      const service = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.id),
+        with: { project: true },
+      });
+      if (!service || service.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+      if (!service.swarmServiceId) return { logs: 'No active deployment — no logs available.' };
+
+      const { nodes: nodesTable } = await import('@click-deploy/database');
+      const { sshManager } = await import('@click-deploy/docker');
+      const { decryptPrivateKey } = await import('../crypto');
+
+      const managerNode = await ctx.db.query.nodes.findFirst({
+        where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
+        with: { sshKey: true },
+      });
+      if (!managerNode?.sshKey) throw new Error('No online manager node');
+
+      const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const serviceName = `${service.project.name}-${service.name}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+
+      const result = await sshManager.exec(sshConfig, `docker service logs --tail ${input.tail} --no-trunc ${serviceName} 2>&1`);
+      return { logs: result.stdout || result.stderr || 'No output' };
+    }),
+});
