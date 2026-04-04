@@ -85,6 +85,7 @@ export default function ServiceDetailPage() {
   const deleteDomain = trpc.domain.delete.useMutation();
   const updateService = trpc.service.update.useMutation();
 
+  const [tab, setTab] = useState<'overview' | 'deployments' | 'domains' | 'env' | 'logs' | 'resources' | 'settings'>('overview');
   const [showAddDomain, setShowAddDomain] = useState(false);
   const [showEnvVars, setShowEnvVars] = useState(false);
   const deploying = hasActiveDeployment || triggerDeploy.isPending;

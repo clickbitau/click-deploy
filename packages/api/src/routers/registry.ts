@@ -75,6 +75,46 @@ export const registryRouter = createRouter({
       return { success: true };
     }),
 
+  /** Update a registry */
+  update: adminProcedure
+    .input(z.object({
+      id: z.string().uuid(),
+      name: z.string().min(1).max(100).optional(),
+      type: z.enum(['dockerhub', 'ghcr', 'ecr', 'self_hosted', 'custom']).optional(),
+      url: z.string().url().max(500).optional(),
+      username: z.string().optional(),
+      password: z.string().optional(),
+      isDefault: z.boolean().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { id, username, password, isDefault, ...rest } = input;
+
+      if (isDefault) {
+        await ctx.db
+          .update(registries)
+          .set({ isDefault: false })
+          .where(eq(registries.organizationId, ctx.session.organizationId));
+      }
+
+      const updates: Record<string, unknown> = { ...rest };
+      if (isDefault !== undefined) updates.isDefault = isDefault;
+      if (username !== undefined) updates.username = username ? encryptPrivateKey(username) : null;
+      if (password !== undefined) updates.password = password ? encryptPrivateKey(password) : null;
+
+      const [updated] = await ctx.db
+        .update(registries)
+        .set(updates)
+        .where(
+          and(
+            eq(registries.id, id),
+            eq(registries.organizationId, ctx.session.organizationId)
+          )
+        )
+        .returning();
+
+      return updated;
+    }),
+
   /** Test registry connectivity — actually runs docker login on the manager node */
   testConnection: adminProcedure
     .input(z.object({ id: z.string().uuid() }))

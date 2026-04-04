@@ -8,9 +8,11 @@ import {
   Trash2,
   Loader2,
   MoreVertical,
+  X,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
+import { useConfirm } from '@/components/confirm-dialog';
 
 const statusStyle: Record<string, string> = {
   active: 'bg-success-500/10 text-success-400 border-success-500/20',
@@ -21,6 +23,21 @@ const statusStyle: Record<string, string> = {
 export default function TunnelsPage() {
   const { data: tunnels, isLoading, refetch } = trpc.tunnel.list.useQuery(undefined, { retry: 1 });
   const [showCreate, setShowCreate] = useState(false);
+  const deleteTunnel = trpc.tunnel.delete.useMutation();
+  const removeRoute = trpc.tunnel.removeRoute.useMutation();
+  const confirm = useConfirm();
+
+  const handleDeleteTunnel = async (id: string) => {
+    const ok = await confirm({ title: 'Delete Tunnel', message: 'This will remove the tunnel and all its routes. The cloudflared connector will be stopped.', confirmText: 'Delete', variant: 'danger' });
+    if (!ok) return;
+    deleteTunnel.mutate({ id }, { onSuccess: () => refetch() });
+  };
+
+  const handleRemoveRoute = async (routeId: string) => {
+    const ok = await confirm({ title: 'Remove Route', message: 'This will remove this ingress route from the tunnel.', confirmText: 'Remove', variant: 'warning' });
+    if (!ok) return;
+    removeRoute.mutate({ routeId }, { onSuccess: () => refetch() });
+  };
 
   return (
     <div>
@@ -79,8 +96,12 @@ export default function TunnelsPage() {
                   <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${statusStyle[tunnel.status] || statusStyle.inactive}`}>
                     {tunnel.status}
                   </span>
-                  <button className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-white/5 rounded">
-                    <MoreVertical className="w-3.5 h-3.5 text-white/30" />
+                  <button
+                    onClick={() => handleDeleteTunnel(tunnel.id)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded"
+                    title="Delete tunnel"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-danger-400" />
                   </button>
                 </div>
               </div>
@@ -89,11 +110,18 @@ export default function TunnelsPage() {
                 {tunnel.routes && tunnel.routes.length > 0 ? (
                   <div className="space-y-1.5">
                     {tunnel.routes.map((route: any) => (
-                      <div key={route.id} className="flex items-center gap-2 text-[11px] text-white/40 px-2 py-1 bg-white/[0.02] rounded">
+                      <div key={route.id} className="flex items-center gap-2 text-[11px] text-white/40 px-2 py-1 bg-white/[0.02] rounded group/route">
                         <Route className="w-3 h-3 text-white/20" />
                         <span className="font-mono">{route.hostname}</span>
                         <span className="text-white/15">→</span>
-                        <span className="font-mono text-white/25">{route.service}</span>
+                        <span className="font-mono text-white/25 flex-1">{route.service}</span>
+                        <button
+                          onClick={() => handleRemoveRoute(route.id)}
+                          className="opacity-0 group-hover/route:opacity-100 transition-opacity p-0.5 hover:bg-red-500/10 rounded"
+                          title="Remove route"
+                        >
+                          <X className="w-3 h-3 text-danger-400" />
+                        </button>
                       </div>
                     ))}
                   </div>

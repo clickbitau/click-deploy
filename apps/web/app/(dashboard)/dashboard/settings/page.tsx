@@ -35,6 +35,7 @@ import {
   Box,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
+import { useConfirm } from '@/components/confirm-dialog';
 
 const tabs = [
   { id: 'infrastructure', label: 'Infrastructure', icon: Server },
@@ -394,27 +395,23 @@ function InfrastructureTab() {
   const [acmeEmail, setAcmeEmail] = useState('');
   const [tsAuthKey, setTsAuthKey] = useState('');
   const [updatingComponent, setUpdatingComponent] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   // Type guard for update data (vs error)
   const updates = updateCheck.data && !('error' in updateCheck.data) ? updateCheck.data as Record<string, any> : null;
 
   const handleUpdate = async (component: 'traefik' | 'registry' | 'nixpacks' | 'tailscale', confirmMsg?: string) => {
-    const updateInfo = updates?.[component];
-    const versionStr = updateInfo?.latestVersion ? ` to ${updateInfo.latestVersion}` : '';
-    const msg = confirmMsg || (updateInfo?.updateAvailable
-      ? `Update ${component}${versionStr}? The service will be briefly restarted.`
-      : `Re-pull ${component} image? This will force a restart.`);
-    if (!window.confirm(msg)) return;
+    if (confirmMsg) {
+      const ok = await confirm({ title: `Update ${component.charAt(0).toUpperCase() + component.slice(1)}`, message: confirmMsg, confirmText: 'Update', variant: 'warning' });
+      if (!ok) return;
+    }
     setUpdatingComponent(component);
     try {
-      await updateComponent.mutateAsync({
-        component,
-        targetVersion: updateInfo?.latestVersion || undefined,
-      });
+      await updateComponent.mutateAsync({ component });
       await infraStatus.refetch();
-      await updateCheck.refetch();
     } catch (err) {
-      alert(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Error is shown via mutation error state
+      console.error(`Update failed:`, err);
     }
     setUpdatingComponent(null);
   };
@@ -455,12 +452,14 @@ function InfrastructureTab() {
               value={status?.traefik?.running ? `Traefik ${(status.traefik as any).version || ''}` : 'Not deployed'}
               detail={status?.traefik?.running ? 'Ports 80, 443' : undefined}
               active={!!status?.traefik?.running}
+              updateBadge={updates?.traefik?.updateAvailable ? `→ ${updates.traefik.latestVersion}` : undefined}
             />
             <StatusCard
               label="Docker Registry"
               value={status?.registry?.running ? 'Running' : 'Not deployed'}
               detail={status?.registry?.url}
               active={!!status?.registry?.running}
+              updateBadge={updates?.registry?.updateAvailable ? `→ ${updates.registry.latestVersion}` : undefined}
             />
             <StatusCard
               label="Tailscale VPN"
@@ -926,11 +925,12 @@ function InfrastructureTab() {
 
 // ── Status Card Component ────────────────────────────────────
 
-function StatusCard({ label, value, detail, active }: {
+function StatusCard({ label, value, detail, active, updateBadge }: {
   label: string;
   value: string;
   detail?: string;
   active: boolean;
+  updateBadge?: string;
 }) {
   return (
     <div className={`rounded-lg p-3 border ${
@@ -945,6 +945,11 @@ function StatusCard({ label, value, detail, active }: {
           <XCircle className="w-3 h-3 text-white/20" />
         )}
         <span className="text-[10px] text-white/40 uppercase tracking-wider">{label}</span>
+        {updateBadge && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-brand-500/15 border border-brand-500/20 text-brand-400 font-medium ml-auto animate-pulse">
+            ⬆ {updateBadge}
+          </span>
+        )}
       </div>
       <p className={`text-sm font-medium ${active ? 'text-white/80' : 'text-white/30'}`}>{value}</p>
       {detail && <p className="text-[11px] text-white/30 mt-0.5 font-mono">{detail}</p>}

@@ -205,7 +205,7 @@ export class SwarmManager {
     };
     networks?: string[];
   }): Promise<string> {
-    const args: string[] = ['docker', 'service', 'create', '--detach=true'];
+    const args: string[] = ['docker', 'service', 'create', '--detach=true', '--no-resolve-image'];
 
     // Name
     args.push('--name', opts.name);
@@ -313,7 +313,7 @@ export class SwarmManager {
       force?: boolean;
     }
   ): Promise<void> {
-    const args: string[] = ['docker', 'service', 'update', '--detach=true'];
+    const args: string[] = ['docker', 'service', 'update', '--detach=true', '--no-resolve-image'];
 
     args.push('--image', image);
 

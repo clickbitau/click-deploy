@@ -8,6 +8,7 @@ import {
   MoreVertical,
   Trash2,
   Loader2,
+  Save,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
@@ -32,6 +33,7 @@ const typeLabels: Record<string, string> = {
 export default function RegistryPage() {
   const { data: registries, isLoading, refetch } = trpc.registry.list.useQuery(undefined, { retry: 1 });
   const [showAdd, setShowAdd] = useState(false);
+  const [editingReg, setEditingReg] = useState<any>(null);
   const deleteReg = trpc.registry.delete.useMutation();
   const confirm = useConfirm();
 
@@ -81,7 +83,7 @@ export default function RegistryPage() {
       {!isLoading && registries && registries.length > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {registries.map((reg: any) => (
-            <div key={reg.id} className="glass-card glass-card-hover group">
+            <div key={reg.id} className="glass-card glass-card-hover group cursor-pointer" onClick={() => setEditingReg(reg)}>
               <div className="px-5 py-4 flex items-start justify-between">
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-500/20 to-brand-600/10 flex items-center justify-center border border-brand-500/10 mt-0.5">
@@ -104,7 +106,7 @@ export default function RegistryPage() {
                     {typeLabels[reg.type] || reg.type}
                   </span>
                   <button
-                    onClick={() => handleDelete(reg.id)}
+                    onClick={(e) => { e.stopPropagation(); handleDelete(reg.id); }}
                     className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded"
                   >
                     <Trash2 className="w-3.5 h-3.5 text-danger-400" />
@@ -126,6 +128,13 @@ export default function RegistryPage() {
         open={showAdd}
         onClose={() => setShowAdd(false)}
         onSuccess={() => { setShowAdd(false); refetch(); }}
+      />
+
+      <EditRegistrySlideOver
+        open={!!editingReg}
+        registry={editingReg}
+        onClose={() => setEditingReg(null)}
+        onSuccess={() => { setEditingReg(null); refetch(); }}
       />
     </div>
   );
@@ -229,6 +238,121 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
         >
           {createReg.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Box className="w-4 h-4" />}
           {createReg.isPending ? 'Adding...' : 'Add Registry'}
+        </button>
+      </div>
+    </SlideOver>
+  );
+}
+
+// ── Edit Registry SlideOver ──────────────────────────────────
+
+function EditRegistrySlideOver({ open, registry, onClose, onSuccess }: {
+  open: boolean; registry: any; onClose: () => void; onSuccess: () => void;
+}) {
+  const updateReg = trpc.registry.update.useMutation();
+  const [name, setName] = useState('');
+  const [type, setType] = useState<'dockerhub' | 'ghcr' | 'ecr' | 'self_hosted' | 'custom'>('self_hosted');
+  const [url, setUrl] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [isDefault, setIsDefault] = useState(false);
+
+  // Populate fields when registry changes
+  const regId = registry?.id;
+  useState(() => {
+    if (registry) {
+      setName(registry.name || '');
+      setType(registry.type || 'self_hosted');
+      setUrl(registry.url || '');
+      setUsername('');
+      setPassword('');
+      setIsDefault(registry.isDefault || false);
+    }
+  });
+
+  // Re-populate when registry changes
+  const [lastRegId, setLastRegId] = useState<string | null>(null);
+  if (regId && regId !== lastRegId) {
+    setLastRegId(regId);
+    setName(registry.name || '');
+    setType(registry.type || 'self_hosted');
+    setUrl(registry.url || '');
+    setUsername('');
+    setPassword('');
+    setIsDefault(registry.isDefault || false);
+  }
+
+  const handleSave = () => {
+    if (!name || !url || !regId) return;
+    updateReg.mutate({
+      id: regId,
+      name, type, url,
+      username: username || undefined,
+      password: password || undefined,
+      isDefault,
+    }, {
+      onSuccess: () => { onClose(); onSuccess(); },
+    });
+  };
+
+  return (
+    <SlideOver open={open} onClose={onClose} title="Edit Registry" description="Update registry configuration">
+      <div className="space-y-5">
+        <FormField label="Registry Name">
+          <FormInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </FormField>
+
+        <FormField label="Type">
+          <FormSelect value={type} onChange={(e) => setType(e.target.value as any)}>
+            <option value="self_hosted">Self-Hosted</option>
+            <option value="dockerhub">Docker Hub</option>
+            <option value="ghcr">GitHub Container Registry</option>
+            <option value="ecr">Amazon ECR</option>
+            <option value="custom">Custom</option>
+          </FormSelect>
+        </FormField>
+
+        <FormField label="Registry URL">
+          <FormInput value={url} onChange={(e) => setUrl(e.target.value)} />
+        </FormField>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/[0.06]" /></div>
+          <div className="relative flex justify-center"><span className="bg-[var(--bg-card)] px-3 text-[10px] text-white/25 uppercase tracking-wider">update credentials</span></div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="Username">
+            <FormInput value={username} onChange={(e) => setUsername(e.target.value)} placeholder="leave blank to keep" />
+          </FormField>
+          <FormField label="Password / Token">
+            <FormInput type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="leave blank to keep" />
+          </FormField>
+        </div>
+
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={isDefault}
+            onChange={(e) => setIsDefault(e.target.checked)}
+            className="w-4 h-4 rounded border-white/10 bg-black/40 text-brand-500 focus:ring-brand-500/50"
+          />
+          <span className="text-xs text-white/50">Set as default registry</span>
+        </label>
+
+        {updateReg.isError && (
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-xs text-red-400">
+            ✗ {updateReg.error?.message}
+          </div>
+        )}
+
+        <button
+          onClick={handleSave}
+          disabled={!name || !url || updateReg.isPending}
+          className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
+        >
+          {updateReg.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          {updateReg.isPending ? 'Saving...' : 'Save Changes'}
         </button>
       </div>
     </SlideOver>

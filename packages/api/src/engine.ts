@@ -834,6 +834,7 @@ export class DeploymentEngine {
         buildDir.includes(':') ? `cd /d "${buildDir}" &&` : `cd ${buildDir} &&`,
         'DOCKER_BUILDKIT=1',
         'docker build',
+        '--provenance=false',
         `-t ${imageName}`,
         `-f ${dockerfile}`,
         ...cacheFlags,
@@ -879,6 +880,7 @@ export class DeploymentEngine {
         'nixpacks build',
         contextPath,
         `--name ${imageName}`,
+        '--docker-args "--provenance=false"',
         ...envArgs,
       ].join(' ');
 
