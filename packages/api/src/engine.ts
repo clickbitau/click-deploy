@@ -692,7 +692,8 @@ export class DeploymentEngine {
 
     if (registryForBuild && buildNode && this.isTailscaleIP(buildNode.host)) {
       const registryHost = registryForBuild.url.split(':')[0];
-      if (!this.isTailscaleIP(registryHost)) {
+      // Skip rewrite if the node uses localhost over a global service map
+      if (!this.isTailscaleIP(registryHost) && registryHost !== '127.0.0.1') {
         // Registry is on internal network — resolve manager's Tailscale IP
         this.log(deploymentId, 'resolve', `Build node ${buildNode.host} is on Tailscale but registry is at ${registryForBuild.url} — resolving Tailscale-routable address...`);
         try {
