@@ -877,6 +877,7 @@ export class DeploymentEngine {
       const nixCmd = [
         `cd ${buildDir} &&`,
         `DOCKER_BUILDKIT=1`,
+        `BUILDX_NO_DEFAULT_ATTESTATIONS=1`,
         'nixpacks build',
         contextPath,
         `--name ${imageName}`,

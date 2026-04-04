@@ -421,7 +421,7 @@ export const infraRouter = createRouter({
 
       const regStatus = registryStatus.status === 'fulfilled'
         ? registryStatus.value
-        : { running: false, replicas: 0, storageMode: 'unknown' as const };
+        : { running: false, replicas: 0, storageMode: 'unknown' as const, mode: 'unknown' as const };
 
       return {
         managerNode: { name: manager.name, host: manager.host },
@@ -432,6 +432,7 @@ export const infraRouter = createRouter({
           url: regStatus.running ? registry.getRegistryUrl() : undefined,
           replicas: regStatus.replicas,
           storageMode: regStatus.storageMode,
+          mode: regStatus.mode,
         },
         tailscale: tailscaleStatus.status === 'fulfilled'
           ? tailscaleStatus.value

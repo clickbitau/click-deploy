@@ -980,7 +980,9 @@ function RegistryCard({ status, updates, updatingComponent, handleUpdate, infraS
             <div className="bg-white/[0.02] rounded-lg p-3">
               <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Replicas</p>
               <p className={`text-sm font-medium ${replicas >= 2 ? 'text-emerald-400' : 'text-white/80'}`}>
-                {replicas} {replicas >= 2 ? '(HA)' : '(Single)'}
+                {registryStatus?.mode === 'global'
+                  ? `${replicas} (Global — all nodes)`
+                  : `${replicas} ${replicas >= 2 ? '(HA)' : '(Single)'}`}
               </p>
             </div>
           </div>
