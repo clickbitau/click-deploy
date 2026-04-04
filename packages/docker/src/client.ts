@@ -65,7 +65,7 @@ async function getRemoteDockerClient(node: NodeConnectionInfo): Promise<Docker> 
     privateKey: node.privateKey,
     keepaliveInterval: 10_000,
     keepaliveCountMax: 3,
-    connectTimeout: 15_000,
+    connectTimeout: 60_000,
   };
 
   // Get the SSH stream forwarded to the remote Docker socket
