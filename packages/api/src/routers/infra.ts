@@ -156,7 +156,7 @@ export const infraRouter = createRouter({
   joinNodeToSwarm: adminProcedure
     .input(z.object({
       nodeId: z.string(),
-      role: z.enum(['manager', 'worker']).default('worker'),
+      role: z.enum(['manager', 'worker']).default('manager'),
     }))
     .mutation(async ({ ctx, input }) => {
       const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
@@ -176,8 +176,14 @@ export const infraRouter = createRouter({
       }
       const token = tokenResult.stdout.trim();
 
-      // Get the manager's advertise address (Tailscale or LAN)
-      const managerAddr = `${manager.host}:2377`;
+      // Get the manager's Swarm advertise address (could be Tailscale or LAN)
+      const managerSwarmAddr = await sshManager.exec(managerSshConfig,
+        `docker node inspect self --format '{{.ManagerStatus.Addr}}' 2>/dev/null`
+      );
+      const swarmEndpoint = managerSwarmAddr.stdout.trim() || `${manager.host}:2377`;
+
+      // Also get the manager's LAN IP for LAN-only nodes
+      const managerLanIp = manager.host;
 
       // Get the target node's SSH config
       const targetNode = await ctx.db.query.nodes.findFirst({
@@ -213,10 +219,29 @@ export const infraRouter = createRouter({
       // Leave any old swarm state first
       await sshManager.exec(targetSshConfig, `docker swarm leave --force 2>/dev/null || true`);
 
-      // Join the swarm — advertise the node's own IP
-      const joinResult = await sshManager.exec(targetSshConfig,
-        `docker swarm join --token ${token} --advertise-addr ${targetNode.host} ${managerAddr}`
-      );
+      // Determine if target is a Tailscale node (100.64.0.0/10)
+      const isTailscale = (ip: string) => {
+        const parts = ip.split('.').map(Number);
+        return parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127;
+      };
+
+      const targetIsTailscale = isTailscale(targetNode.host);
+
+      // Tailscale nodes join via the Swarm's advertise address (Tailscale IP)
+      // LAN nodes join via the manager's LAN IP on port 2377
+      const joinAddr = targetIsTailscale
+        ? swarmEndpoint
+        : `${managerLanIp}:2377`;
+
+      const joinCmd = [
+        `docker swarm join`,
+        `--token ${token}`,
+        `--advertise-addr ${targetNode.host}`,
+        `--listen-addr 0.0.0.0:2377`,
+        joinAddr,
+      ].join(' ');
+
+      const joinResult = await sshManager.exec(targetSshConfig, joinCmd);
 
       if (joinResult.code !== 0) {
         throw new Error(`Failed to join swarm: ${joinResult.stderr}`);
