@@ -105,7 +105,7 @@ const sql = postgres(process.env.DATABASE_URL, { max: 1 });
       "RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER " +
       "SET search_path = public AS " +
       "$fn$BEGIN INSERT INTO public.ui_events (event_type, payload) " +
-      "VALUES (TG_OP, jsonb_build_object('tbl', TG_TABLE_NAME)); " +
+      "VALUES (TG_OP, jsonb_build_object($$tbl$$, TG_TABLE_NAME)); " +
       "RETURN NULL; END;$fn$"
     );
     console.log("  ✓ broadcast_ui_event function created");
