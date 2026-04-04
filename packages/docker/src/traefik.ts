@@ -372,7 +372,7 @@ export class RegistryManager {
     replicas?: number;
   }): Promise<{ created: boolean; updated: boolean; registryUrl: string; storageMode: 'local' | 's3' }> {
     const serviceName = 'click-deploy-registry';
-    const registryUrl = `${this.managerNode.host}:5000`;
+    const registryUrl = `127.0.0.1:5000`;
     const useS3 = !!opts?.s3;
 
     // Check if already running
@@ -469,7 +469,7 @@ export class RegistryManager {
     replicas?: number;
   }): Promise<{ success: boolean; registryUrl: string }> {
     const serviceName = 'click-deploy-registry';
-    const registryUrl = `${this.managerNode.host}:5000`;
+    const registryUrl = `127.0.0.1:5000`;
     const replicas = opts?.replicas ?? 2;
 
     // Ensure the overlay network exists before any changes
