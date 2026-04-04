@@ -3,8 +3,10 @@
 // ============================================================
 import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
-import { registries } from '@click-deploy/database';
+import { registries, nodes, sshKeys } from '@click-deploy/database';
 import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
+import { encryptPrivateKey, decryptPrivateKey } from '../crypto';
+import { sshManager } from '@click-deploy/docker';
 
 export const registryRouter = createRouter({
   /** List registries for org (credentials masked) */
@@ -40,11 +42,16 @@ export const registryRouter = createRouter({
           .where(eq(registries.organizationId, ctx.session.organizationId));
       }
 
-      // TODO: Encrypt credentials before storage
+      // Encrypt credentials before storage
+      const encryptedUsername = input.username ? encryptPrivateKey(input.username) : null;
+      const encryptedPassword = input.password ? encryptPrivateKey(input.password) : null;
+
       const [registry] = await ctx.db
         .insert(registries)
         .values({
           ...input,
+          username: encryptedUsername,
+          password: encryptedPassword,
           organizationId: ctx.session.organizationId,
         })
         .returning();
@@ -68,7 +75,7 @@ export const registryRouter = createRouter({
       return { success: true };
     }),
 
-  /** Test registry connectivity */
+  /** Test registry connectivity — actually runs docker login on the manager node */
   testConnection: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -81,7 +88,81 @@ export const registryRouter = createRouter({
 
       if (!registry) throw new Error('Registry not found');
 
-      // TODO: Actually test `docker login` against the registry
-      return { success: true, message: 'Connection successful' };
+      // Self-hosted registries might not need login — just check /v2/
+      if (registry.type === 'self_hosted' && !registry.username) {
+        try {
+          const managerNode = await ctx.db.query.nodes.findFirst({
+            where: and(
+              eq(nodes.organizationId, ctx.session.organizationId),
+              eq(nodes.role, 'manager'),
+              eq(nodes.status, 'online'),
+            ),
+            with: { sshKey: true },
+          });
+
+          if (!managerNode?.sshKey) {
+            return { success: false, message: 'No online manager node available to test' };
+          }
+
+          const sshConfig = {
+            host: managerNode.host,
+            port: managerNode.port,
+            username: managerNode.sshUser,
+            privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+          };
+
+          const result = await sshManager.exec(sshConfig, `curl -sf -m 5 ${registry.url}/v2/ >/dev/null 2>&1 && echo 'ok' || echo 'fail'`);
+          const ok = result.stdout.trim() === 'ok';
+          return { success: ok, message: ok ? 'Registry is reachable' : 'Registry is not reachable' };
+        } catch (err: any) {
+          return { success: false, message: err.message || 'Connection failed' };
+        }
+      }
+
+      // For authenticated registries, try docker login
+      if (registry.username && registry.password) {
+        try {
+          const managerNode = await ctx.db.query.nodes.findFirst({
+            where: and(
+              eq(nodes.organizationId, ctx.session.organizationId),
+              eq(nodes.role, 'manager'),
+              eq(nodes.status, 'online'),
+            ),
+            with: { sshKey: true },
+          });
+
+          if (!managerNode?.sshKey) {
+            return { success: false, message: 'No online manager node available to test' };
+          }
+
+          const sshConfig = {
+            host: managerNode.host,
+            port: managerNode.port,
+            username: managerNode.sshUser,
+            privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+          };
+
+          const username = decryptPrivateKey(registry.username);
+          const password = decryptPrivateKey(registry.password);
+
+          const result = await sshManager.exec(
+            sshConfig,
+            `echo '${password.replace(/'/g, "'\\''")}' | docker login ${registry.url} -u '${username.replace(/'/g, "'\\''")}' --password-stdin 2>&1`
+          );
+
+          const ok = result.code === 0;
+          // Clean up docker config after test
+          await sshManager.exec(sshConfig, `docker logout ${registry.url} 2>/dev/null || true`);
+
+          return {
+            success: ok,
+            message: ok ? 'Login successful' : result.stdout.trim() || result.stderr.trim() || 'Login failed',
+          };
+        } catch (err: any) {
+          return { success: false, message: err.message || 'Connection failed' };
+        }
+      }
+
+      return { success: true, message: 'No credentials to test — registry assumed reachable' };
     }),
 });

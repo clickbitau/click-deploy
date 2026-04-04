@@ -7,6 +7,7 @@ import {
   timestamp,
   uuid,
   varchar,
+  index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations } from './auth';
@@ -35,7 +36,9 @@ export const githubInstallations = pgTable('github_installations', {
   installationId: varchar('installation_id', { length: 255 }).notNull().unique(),
   accountName: varchar('account_name', { length: 255 }).notNull(), // e.g. the GitHub user/org name
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  appIdx: index('idx_gh_inst_app').on(table.githubAppId),
+}));
 
 // ── Relations ──────────────────────────────────────────────
 export const githubAppsRelations = relations(githubApps, ({ one, many }) => ({
