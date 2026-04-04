@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { useConfirm } from '@/components/confirm-dialog';
+import { toast } from 'sonner';
 
 const tabs = [
   { id: 'infrastructure', label: 'Infrastructure', icon: Server },
@@ -876,6 +877,7 @@ function RegistryCard({ status, updates, updatingComponent, handleUpdate, infraS
   handleUpdate: (component: 'traefik' | 'registry' | 'nixpacks' | 'tailscale', confirmMsg?: string) => void;
   infraStatus: any;
 }) {
+  const confirm = useConfirm();
   const deployRegistry = trpc.infra.deployRegistry.useMutation();
   const configureS3 = trpc.infra.configureRegistryS3.useMutation();
   const [showS3Config, setShowS3Config] = useState(false);
@@ -893,12 +895,16 @@ function RegistryCard({ status, updates, updatingComponent, handleUpdate, infraS
 
   const handleMigrateToS3 = async () => {
     if (!s3Config.endpoint || !s3Config.accessKey || !s3Config.secretKey) {
-      alert('Please fill in all S3 credentials.');
+      toast.error('Please fill in all S3 credentials.');
       return;
     }
-    if (!window.confirm(
-      'This will restart the registry service with S3 storage. Existing locally-stored images will NOT be migrated. Continue?'
-    )) return;
+    const ok = await confirm({
+      title: 'Migrate to S3 Storage',
+      message: 'This will restart the registry service with S3 storage. Existing locally-stored images will NOT be migrated. Continue?',
+      confirmText: 'Migrate',
+      variant: 'warning'
+    });
+    if (!ok) return;
 
     configureS3.mutate(s3Config, {
       onSuccess: () => {
