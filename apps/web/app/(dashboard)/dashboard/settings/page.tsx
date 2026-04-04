@@ -28,6 +28,9 @@ import {
   Download,
   GitCommit,
   ArrowUpCircle,
+  Copy,
+  Clock,
+  Plus,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 
@@ -197,21 +200,7 @@ export default function SettingsPage() {
             <TeamTab user={user} />
           )}
 
-          {activeTab === 'api-keys' && (
-            <div className="glass-card flex flex-col items-center justify-center py-16">
-              <div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center mb-4">
-                <Key className="w-7 h-7 text-white/20" />
-              </div>
-              <h3 className="text-sm font-semibold text-white/60 mb-1">No API keys</h3>
-              <p className="text-xs text-white/30 mb-5 max-w-sm text-center">
-                Create API keys for programmatic access to Click-Deploy. Keys can be scoped to specific permissions.
-              </p>
-              <button className="btn-primary flex items-center gap-2 text-xs">
-                <Key className="w-3.5 h-3.5" />
-                Generate API Key
-              </button>
-            </div>
-          )}
+          {activeTab === 'api-keys' && <ApiKeysTab />}
 
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'updates' && <UpdatesTab />}
@@ -1612,6 +1601,172 @@ function UpdatesTab() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── API Keys Tab ────────────────────────────────────────────
+
+function ApiKeysTab() {
+  const apiKeys = trpc.system.listApiKeys.useQuery();
+  const createKey = trpc.system.createApiKey.useMutation();
+  const deleteKey = trpc.system.deleteApiKey.useMutation();
+  const [keyName, setKeyName] = useState('');
+  const [newKey, setNewKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleCreate = () => {
+    if (!keyName.trim()) return;
+    createKey.mutate({ name: keyName.trim() }, {
+      onSuccess: (data) => {
+        setNewKey(data.key);
+        setKeyName('');
+        apiKeys.refetch();
+      },
+    });
+  };
+
+  const handleCopy = () => {
+    if (newKey) {
+      navigator.clipboard.writeText(newKey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleDelete = (id: string) => {
+    setDeletingId(id);
+    deleteKey.mutate({ id }, {
+      onSuccess: () => { setDeletingId(null); apiKeys.refetch(); },
+      onError: () => setDeletingId(null),
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Create Key */}
+      <div className="glass-card p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500/20 to-accent-500/20 flex items-center justify-center">
+            <Key className="w-5 h-5 text-brand-400" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">API Keys</h2>
+            <p className="text-[11px] text-white/30">Generate keys for programmatic access via REST API</p>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={keyName}
+            onChange={(e) => setKeyName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+            placeholder="Key name (e.g. CI/CD Pipeline)"
+            className="flex-1 bg-black/40 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all"
+          />
+          <button
+            onClick={handleCreate}
+            disabled={!keyName.trim() || createKey.isPending}
+            className="btn-primary flex items-center gap-2 disabled:opacity-40"
+          >
+            {createKey.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+            Generate
+          </button>
+        </div>
+      </div>
+
+      {/* Newly Created Key (shown once) */}
+      {newKey && (
+        <div className="glass-card p-6 border-brand-500/30">
+          <div className="bg-brand-500/10 border border-brand-500/20 rounded-lg p-4 mb-3">
+            <p className="text-xs text-brand-400 font-semibold mb-2">⚠ Copy this key now — it won't be shown again</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-black/50 rounded-lg px-3 py-2 text-sm font-mono text-white/80 break-all select-all">
+                {newKey}
+              </code>
+              <button
+                onClick={handleCopy}
+                className="shrink-0 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition-colors flex items-center gap-1.5 text-xs"
+              >
+                {copied ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-white/40" />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          </div>
+          <button
+            onClick={() => setNewKey(null)}
+            className="text-xs text-white/30 hover:text-white/50 transition-colors"
+          >Dismiss</button>
+        </div>
+      )}
+
+      {/* Key List */}
+      {apiKeys.isLoading ? (
+        <div className="glass-card p-6 flex items-center justify-center">
+          <Loader2 className="w-4 h-4 animate-spin text-white/30" />
+        </div>
+      ) : apiKeys.data && apiKeys.data.length > 0 ? (
+        <div className="glass-card">
+          <div className="px-5 py-3 border-b border-white/5">
+            <p className="text-xs text-white/30">{apiKeys.data.length} key{apiKeys.data.length !== 1 ? 's' : ''}</p>
+          </div>
+          <div className="divide-y divide-white/[0.03]">
+            {apiKeys.data.map((k: any) => (
+              <div key={k.id} className="px-5 py-3 flex items-center justify-between group">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white/80">{k.name}</p>
+                  <div className="flex items-center gap-3 mt-1 text-[11px] text-white/25">
+                    <span className="font-mono">{k.keyPrefix}•••••••</span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {new Date(k.createdAt).toLocaleDateString()}
+                    </span>
+                    {k.lastUsedAt && (
+                      <span>Last used {new Date(k.lastUsedAt).toLocaleDateString()}</span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDelete(k.id)}
+                  disabled={deletingId === k.id}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-danger-500/10 rounded-lg text-white/20 hover:text-danger-400 disabled:opacity-50"
+                  title="Delete key"
+                >
+                  {deletingId === k.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : !newKey ? (
+        <div className="glass-card flex flex-col items-center justify-center py-12">
+          <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center mb-3">
+            <Key className="w-6 h-6 text-white/15" />
+          </div>
+          <p className="text-xs text-white/30">No API keys yet. Generate one above.</p>
+        </div>
+      ) : null}
+
+      {/* Usage Examples */}
+      <div className="glass-card p-6">
+        <h3 className="text-sm font-semibold mb-3">Usage</h3>
+        <div className="space-y-3">
+          <div>
+            <p className="text-[11px] text-white/40 mb-1">List services</p>
+            <code className="block bg-black/40 rounded-lg px-3 py-2 text-xs font-mono text-white/60 whitespace-pre-wrap">
+{`curl -H "Authorization: Bearer cd_YOUR_KEY" \\\n  ${typeof window !== 'undefined' ? window.location.origin : ''}/api/v1`}
+            </code>
+          </div>
+          <div>
+            <p className="text-[11px] text-white/40 mb-1">Trigger a deployment</p>
+            <code className="block bg-black/40 rounded-lg px-3 py-2 text-xs font-mono text-white/60 whitespace-pre-wrap">
+{`curl -X POST \\\n  -H "Authorization: Bearer cd_YOUR_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"serviceName": "my-app"}' \\\n  ${typeof window !== 'undefined' ? window.location.origin : ''}/api/v1`}
+            </code>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

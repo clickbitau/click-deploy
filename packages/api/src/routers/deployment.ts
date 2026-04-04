@@ -3,7 +3,7 @@
 // ============================================================
 import { z } from 'zod';
 import { eq, and, desc } from 'drizzle-orm';
-import { deployments, services, projects } from '@click-deploy/database';
+import { deployments, services, projects, inAppNotifications } from '@click-deploy/database';
 import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
 import { deploymentEngine } from '../engine';
 
@@ -157,6 +157,16 @@ export const deploymentRouter = createRouter({
       deploymentEngine.runDeployment(deployment!.id).catch((err) => {
         console.error('[deploy] Background deployment failed:', err);
       });
+
+      // Create in-app notification for the deploy trigger
+      ctx.db.insert(inAppNotifications).values({
+        organizationId: ctx.session.organizationId,
+        title: `Deployment started: ${service.name}`,
+        message: `Building from branch ${input.branch ?? service.gitBranch ?? 'main'}`,
+        level: 'info',
+        category: 'deployment',
+        resourceId: deployment!.id,
+      }).catch(() => {}); // fire-and-forget
 
       return deployment;
     }),

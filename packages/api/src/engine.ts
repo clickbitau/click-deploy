@@ -19,6 +19,7 @@ import {
   sshKeys,
   registries,
   domains,
+  inAppNotifications,
 } from '@click-deploy/database';
 import { sshManager, SwarmManager, generateTraefikLabels, type NodeConnectionInfo, type TraefikRouteConfig } from '@click-deploy/docker';
 import { decryptPrivateKey } from './crypto';
@@ -301,6 +302,16 @@ export class DeploymentEngine {
         await db.update(services)
           .set({ status: 'running', updatedAt: new Date() })
           .where(eq(services.id, ctx.service.id));
+
+        // Notify: deploy success
+        db.insert(inAppNotifications).values({
+          organizationId: ctx.organizationId,
+          title: `Deploy succeeded: ${ctx.service.name}`,
+          message: ctx.commitSha ? `Commit ${ctx.commitSha.slice(0, 7)} is now live` : 'Service is now running',
+          level: 'success',
+          category: 'deployment',
+          resourceId: deploymentId,
+        }).catch(() => {});
       } else {
         throw new Error(`Service failed to converge: ${convergence.error}`);
       }
@@ -327,6 +338,24 @@ export class DeploymentEngine {
           buildLogs: this.logsToText(),
           completedAt: new Date(),
         });
+
+        // Notify: deploy failure
+        try {
+          const failCtx = await db.query.deployments.findFirst({
+            where: eq(deployments.id, deploymentId),
+            with: { service: { with: { project: true } } },
+          });
+          if (failCtx?.service) {
+            db.insert(inAppNotifications).values({
+              organizationId: failCtx.service.project.organizationId,
+              title: `Deploy failed: ${failCtx.service.name}`,
+              message: message.slice(0, 200),
+              level: 'error',
+              category: 'deployment',
+              resourceId: deploymentId,
+            }).catch(() => {});
+          }
+        } catch { /* best-effort */ }
       }
     } finally {
       // Unregister from active deployments

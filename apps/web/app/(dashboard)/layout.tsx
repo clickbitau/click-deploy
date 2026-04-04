@@ -29,6 +29,7 @@ import {
   X,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { NotificationBell, ToastProvider } from '@/components/notification-bell';
 import { signOut } from '@/lib/auth-client';
 import { UpdateNotification } from '@/components/update-notification';
 import { trpc } from '@/lib/trpc';
@@ -64,6 +65,7 @@ export default function DashboardLayout({
   };
 
   return (
+    <ToastProvider>
     <div className="flex h-screen overflow-hidden">
       {/* ── Sidebar ─────────────────────────────────── */}
       <aside className="sidebar w-64 flex flex-col h-full shrink-0">
@@ -129,8 +131,11 @@ export default function DashboardLayout({
         {/* User section */}
         <div className="px-3 pb-4 mt-auto">
           <div className="flex items-center justify-between px-2 mb-4">
-            <span className="text-xs font-semibold text-white/40 uppercase tracking-widest">Theme</span>
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-white/40 uppercase tracking-widest">Theme</span>
+              <ThemeToggle />
+            </div>
+            <NotificationBell />
           </div>
           <UserCard />
         </div>
@@ -143,6 +148,7 @@ export default function DashboardLayout({
         </div>
       </main>
     </div>
+    </ToastProvider>
   );
 }
 

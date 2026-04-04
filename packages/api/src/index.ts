@@ -13,3 +13,4 @@ export {
 export { deploymentEngine, DeploymentEngine } from './engine';
 export { startHeartbeatMonitor, stopHeartbeatMonitor } from './heartbeat';
 export { encryptPrivateKey, decryptPrivateKey } from './crypto';
+export { validateApiKey } from './routers/system';

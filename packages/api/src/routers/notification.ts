@@ -2,8 +2,8 @@
 // Click-Deploy — Notification Router
 // ============================================================
 import { z } from 'zod';
-import { eq, and, desc } from 'drizzle-orm';
-import { notificationChannels, notificationRules, auditLogs } from '@click-deploy/database';
+import { eq, and, desc, isNull, or, sql } from 'drizzle-orm';
+import { notificationChannels, notificationRules, auditLogs, inAppNotifications } from '@click-deploy/database';
 import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
 
 export const notificationRouter = createRouter({
@@ -98,5 +98,103 @@ export const notificationRouter = createRouter({
         limit: input.limit,
         with: { user: { columns: { id: true, name: true, email: true } } },
       });
+    }),
+
+  // ── In-App Notifications ──────────────────────────────────
+
+  /** List in-app notifications for the current user */
+  inAppList: protectedProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(100).default(50) }).optional())
+    .query(async ({ ctx, input }) => {
+      return ctx.db.query.inAppNotifications.findMany({
+        where: and(
+          eq(inAppNotifications.organizationId, ctx.session.organizationId),
+          or(
+            eq(inAppNotifications.userId, ctx.session.userId),
+            isNull(inAppNotifications.userId), // org-wide broadcasts
+          ),
+        ),
+        orderBy: [desc(inAppNotifications.createdAt)],
+        limit: input?.limit ?? 50,
+      });
+    }),
+
+  /** Count unread in-app notifications */
+  inAppUnreadCount: protectedProcedure.query(async ({ ctx }) => {
+    const result = await ctx.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(inAppNotifications)
+      .where(
+        and(
+          eq(inAppNotifications.organizationId, ctx.session.organizationId),
+          or(
+            eq(inAppNotifications.userId, ctx.session.userId),
+            isNull(inAppNotifications.userId),
+          ),
+          isNull(inAppNotifications.readAt),
+        ),
+      );
+    return result[0]?.count ?? 0;
+  }),
+
+  /** Mark one or all in-app notifications as read */
+  inAppMarkRead: protectedProcedure
+    .input(z.object({
+      id: z.string().uuid().optional(), // single notification
+      all: z.boolean().optional(),       // mark all as read
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.all) {
+        await ctx.db
+          .update(inAppNotifications)
+          .set({ readAt: new Date() })
+          .where(
+            and(
+              eq(inAppNotifications.organizationId, ctx.session.organizationId),
+              or(
+                eq(inAppNotifications.userId, ctx.session.userId),
+                isNull(inAppNotifications.userId),
+              ),
+              isNull(inAppNotifications.readAt),
+            ),
+          );
+      } else if (input.id) {
+        await ctx.db
+          .update(inAppNotifications)
+          .set({ readAt: new Date() })
+          .where(
+            and(
+              eq(inAppNotifications.id, input.id),
+              eq(inAppNotifications.organizationId, ctx.session.organizationId),
+            ),
+          );
+      }
+      return { success: true };
+    }),
+
+  /** Create an in-app notification (admin/system use) */
+  inAppCreate: protectedProcedure
+    .input(z.object({
+      title: z.string().min(1).max(200),
+      message: z.string().max(2000).default(''),
+      level: z.enum(['info', 'success', 'warning', 'error']).default('info'),
+      category: z.string().max(50).default('system'),
+      resourceId: z.string().uuid().optional(),
+      userId: z.string().uuid().optional(), // null = broadcast to org
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const [notification] = await ctx.db
+        .insert(inAppNotifications)
+        .values({
+          organizationId: ctx.session.organizationId,
+          userId: input.userId ?? null,
+          title: input.title,
+          message: input.message,
+          level: input.level,
+          category: input.category,
+          resourceId: input.resourceId,
+        })
+        .returning();
+      return notification;
     }),
 });

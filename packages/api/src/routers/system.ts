@@ -382,4 +382,115 @@ export const systemRouter = createRouter({
 
       return { success: true };
     }),
+
+  // ── API Keys ────────────────────────────────────────────────
+
+  /** Create a new API key */
+  createApiKey: adminProcedure
+    .input(z.object({
+      name: z.string().min(1).max(100),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { createHash } = await import('crypto');
+
+      // Generate a random key with cd_ prefix
+      const rawKey = `cd_${randomBytes(24).toString('hex')}`;
+      const keyHash = createHash('sha256').update(rawKey).digest('hex');
+      const keyPrefix = rawKey.slice(0, 12);
+
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+      });
+      const settings = (org?.settings as any) || {};
+      const apiKeys = settings.apiKeys || [];
+
+      const newKey = {
+        id: randomBytes(8).toString('hex'),
+        name: input.name,
+        keyHash,
+        keyPrefix,
+        createdAt: new Date().toISOString(),
+        createdBy: ctx.session.userId,
+        lastUsedAt: null,
+      };
+
+      apiKeys.push(newKey);
+
+      await ctx.db.update(organizations)
+        .set({ settings: { ...settings, apiKeys }, updatedAt: new Date() })
+        .where(eq(organizations.id, ctx.session.organizationId));
+
+      // Return the full key ONCE — it can never be retrieved again
+      return { key: rawKey, id: newKey.id, name: input.name, keyPrefix };
+    }),
+
+  /** List API keys (never returns the full key) */
+  listApiKeys: protectedProcedure
+    .query(async ({ ctx }) => {
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+      });
+      const settings = (org?.settings as any) || {};
+      const apiKeys = (settings.apiKeys || []).map((k: any) => ({
+        id: k.id,
+        name: k.name,
+        keyPrefix: k.keyPrefix,
+        createdAt: k.createdAt,
+        lastUsedAt: k.lastUsedAt,
+      }));
+      return apiKeys;
+    }),
+
+  /** Delete an API key */
+  deleteApiKey: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+      });
+      const settings = (org?.settings as any) || {};
+      const apiKeys = (settings.apiKeys || []).filter((k: any) => k.id !== input.id);
+
+      await ctx.db.update(organizations)
+        .set({ settings: { ...settings, apiKeys }, updatedAt: new Date() })
+        .where(eq(organizations.id, ctx.session.organizationId));
+
+      return { success: true };
+    }),
 });
+
+// ── API Key Validation (for REST routes) ─────────────────────
+
+/**
+ * Validate a bearer token and return the organization ID if valid.
+ * Updates lastUsedAt on successful validation.
+ */
+export async function validateApiKey(bearerToken: string): Promise<{ organizationId: string } | null> {
+  const { createHash } = await import('crypto');
+  const { db } = await import('@click-deploy/database');
+
+  if (!bearerToken.startsWith('cd_')) return null;
+
+  const keyHash = createHash('sha256').update(bearerToken).digest('hex');
+
+  // Search all organizations for a matching key hash
+  const allOrgs = await db.query.organizations.findMany();
+
+  for (const org of allOrgs) {
+    const settings = (org.settings as any) || {};
+    const apiKeys = settings.apiKeys || [];
+
+    const matchIdx = apiKeys.findIndex((k: any) => k.keyHash === keyHash);
+    if (matchIdx !== -1) {
+      // Update lastUsedAt
+      apiKeys[matchIdx].lastUsedAt = new Date().toISOString();
+      await db.update(organizations)
+        .set({ settings: { ...settings, apiKeys } })
+        .where(eq(organizations.id, org.id));
+
+      return { organizationId: org.id };
+    }
+  }
+
+  return null;
+}
