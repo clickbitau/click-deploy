@@ -322,7 +322,7 @@ export const infraRouter = createRouter({
         });
 
         const output = await new Promise<string>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('Command timeout after 15s')), 15_000);
+          const timer = setTimeout(() => reject(new Error('Command timeout after 60s')), 60_000);
           client.exec(
             'echo "===DISK===" && df -h / --output=size,used,avail,pcent 2>/dev/null | tail -1 && echo "===DOCKER===" && docker system df --format "{{.Type}}\t{{.TotalCount}}\t{{.Active}}\t{{.Size}}\t{{.Reclaimable}}" 2>/dev/null && echo "===IMAGES===" && docker image ls --format "{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}" 2>/dev/null && echo "===CONTAINERS===" && docker ps -a --filter status=exited --format "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Size}}" 2>/dev/null && echo "===END==="',
             (err, stream) => {
