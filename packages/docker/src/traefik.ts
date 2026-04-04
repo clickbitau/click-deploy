@@ -181,7 +181,7 @@ export class TraefikManager {
     }
 
     // 4. Remove any services that conflict with Traefik's ports
-    const requiredPorts = [httpPort, httpsPort, ...(dashboardEnabled ? [8080] : [])];
+    const requiredPorts = [httpPort, httpsPort];
     for (const port of requiredPorts) {
       const conflict = await sshManager.exec(this.sshConfig,
         `docker service ls --format '{{.ID}} {{.Name}} {{.Ports}}' | grep ':${port}->' | head -1`
@@ -202,8 +202,7 @@ export class TraefikManager {
       `--constraint 'node.role == manager'`,
       `--publish ${httpPort}:80`,
       `--publish ${httpsPort}:443`,
-      // Traefik dashboard on 8080 (internal only)
-      dashboardEnabled ? `--publish 8080:8080` : '',
+      // Traefik dashboard is only accessible internally, not published publicly
       `--mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly`,
       `--mount type=volume,source=click-deploy-traefik-certs,target=/letsencrypt`,
       `--network click-deploy-net`,
@@ -213,7 +212,7 @@ export class TraefikManager {
       `traefik:v3.3`,
       // -- Traefik CLI arguments --
       `--api.dashboard=${dashboardEnabled}`,
-      `--api.insecure=${dashboardEnabled}`,
+      `--api.insecure=false`,
       `--log.level=${logLevel}`,
       // Entrypoints
       `--entrypoints.web.address=:80`,
@@ -272,7 +271,7 @@ export class TraefikManager {
       running: true,
       version: parts[0]?.replace('traefik:', '').replace(/@sha256:.+$/, '') || 'unknown',
       replicas: parseInt(parts[1] || '0'),
-      ports: ['80', '443', '8080'],
+      ports: ['80', '443'],
     };
   }
 

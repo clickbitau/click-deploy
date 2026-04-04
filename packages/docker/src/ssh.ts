@@ -276,8 +276,9 @@ export class SSHConnectionManager {
 
       client.on('ready', () => {
         clearTimeout(timer);
-        // Install the public key
-        const cmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "${opts.publicKey}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo "KEY_INSTALLED"`;
+        // Install the public key safely
+        const safeKey = opts.publicKey.trim().replace(/'/g, "'\\''");
+        const cmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${safeKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo "KEY_INSTALLED"`;
 
         client.exec(cmd, (err, stream) => {
           if (err) {

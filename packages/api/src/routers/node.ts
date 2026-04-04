@@ -11,6 +11,7 @@ import { nodes, sshKeys } from '@click-deploy/database';
 import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
 import { deploymentEngine } from '../engine';
 import { decryptPrivateKey } from '../crypto';
+import { shellEscape } from '../shell';
 import { TraefikManager, RegistryManager, TailscaleManager, sshManager } from '@click-deploy/docker';
 import { users } from '@click-deploy/database/src/schema/auth';
 import { registries } from '@click-deploy/database/src/schema/networking';
@@ -533,8 +534,9 @@ export const nodeRouter = createRouter({
             };
 
             console.log(`[node] Configuring insecure-registry ${orgRegistry.url} on ${node.name}...`);
+            const escapedUrl = shellEscape(orgRegistry.url);
             const configScript = [
-              `REGISTRY_URL='${orgRegistry.url}'`,
+              `REGISTRY_URL=${escapedUrl}`,
               `DAEMON_JSON='/etc/docker/daemon.json'`,
               `if [ -f "$DAEMON_JSON" ]; then`,
               `  if grep -q "$REGISTRY_URL" "$DAEMON_JSON"; then`,

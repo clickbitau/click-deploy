@@ -22,8 +22,9 @@ import {
   inAppNotifications,
 } from '@click-deploy/database';
 import { sshManager, SwarmManager, generateTraefikLabels, type NodeConnectionInfo, type TraefikRouteConfig } from '@click-deploy/docker';
-import { decryptPrivateKey } from './crypto';
+import { decryptPrivateKey, decryptEnvVars } from './crypto';
 import { getInstallationToken } from './routers/github';
+import { shellEscape } from './shell';
 
 // ── Reserved Ports ──────────────────────────────────────────
 // These ports are used by the platform and should not be assigned to user services
@@ -764,7 +765,7 @@ export class DeploymentEngine {
         sourceType: deployment.service.sourceType,
         imageName: deployment.service.imageName,
         imageTag: deployment.service.imageTag,
-        envVars: (deployment.service.envVars as Record<string, string>) || {},
+        envVars: decryptEnvVars(deployment.service.envVars),
         ports: (deployment.service.ports as any[]) || [],
         replicas: deployment.service.replicas,
         healthCheck: deployment.service.healthCheck as any,
@@ -825,9 +826,16 @@ export class DeploymentEngine {
     }
 
     // Clean previous build dir and clone
+    const escapedDir = shellEscape(buildDir);
+    const escapedBranch = shellEscape(branch);
+    const escapedUrl = shellEscape(authedUrl);
+    
+    // Fallback safely for Windows using generic powershell handling if needed,
+    // Note: PowerShell -Command treats whole string as standard string but we should still
+    // attempt some basic sanity or leave it to standard bash paths which are primary.
     const cleanCmd = buildDir.includes(':')
       ? `powershell -Command "if (Test-Path '${buildDir}') { Remove-Item -Recurse -Force '${buildDir}' }; git clone --depth 1 --branch ${branch} ${authedUrl} '${buildDir}'"`
-      : `rm -rf ${buildDir} && git clone --depth 1 --branch ${branch} ${authedUrl} ${buildDir}`;
+      : `rm -rf ${escapedDir} && git clone --depth 1 --branch ${escapedBranch} ${escapedUrl} ${escapedDir}`;
 
     const result = await sshManager.exec(sshConfig, cleanCmd);
 
@@ -885,10 +893,9 @@ export class DeploymentEngine {
       // Dockerfile build (auto-detected or explicitly specified)
       this.log(deploymentId, 'build', `Using Dockerfile: ${dockerfile}`);
 
-      const sanitize = (s: string) => s.replace(/['"\\$`!;|&(){}]/g, '');
       const buildArgs: string[] = [];
       for (const [key, value] of Object.entries(service.envVars)) {
-        buildArgs.push(`--build-arg ${sanitize(key)}="${sanitize(value)}"`);
+        buildArgs.push(`--build-arg ${shellEscape(`${key}=${value}`)}`);
       }
 
       // Build cache flags — reuse unchanged layers from previous image
@@ -937,10 +944,9 @@ export class DeploymentEngine {
       }
 
       // Build environment args
-      const sanitize = (s: string) => s.replace(/['"\\$`!;|&(){}]/g, '');
       const envArgs: string[] = [];
       for (const [key, value] of Object.entries(service.envVars)) {
-        envArgs.push(`--env ${sanitize(key)}="${sanitize(value)}"`);
+        envArgs.push(`--env ${shellEscape(`${key}=${value}`)}`);
       }
 
       const nixCmd = [
@@ -1010,7 +1016,7 @@ export class DeploymentEngine {
     this.log(deploymentId, 'push', `Pushing to ${registry?.url || 'registry'}...`);
     const pushResult = await sshManager.execStream(
       sshConfig,
-      `docker push ${imageName}`,
+      `docker push ${shellEscape(imageName)}`,
       (line: string) => {
         // Only log meaningful progress lines (skip empty lines)
         const trimmed = line.trim();

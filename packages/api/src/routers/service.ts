@@ -87,10 +87,12 @@ export const serviceRouter = createRouter({
         throw new Error('Project not found');
       }
 
-      return ctx.db.query.services.findMany({
+      const svcs = await ctx.db.query.services.findMany({
         where: eq(services.projectId, input.projectId),
         orderBy: [desc(services.updatedAt)],
       });
+      const { decryptEnvVars } = await import('../crypto');
+      return svcs.map(s => ({ ...s, envVars: decryptEnvVars(s.envVars) }));
     }),
 
   /** Get a single service with full details */
@@ -108,7 +110,8 @@ export const serviceRouter = createRouter({
         throw new Error('Service not found');
       }
 
-      return service;
+      const { decryptEnvVars } = await import('../crypto');
+      return { ...service, envVars: decryptEnvVars(service.envVars) };
     }),
 
   /** Create a new service */
@@ -165,10 +168,14 @@ export const serviceRouter = createRouter({
       // Strip non-DB fields before insert
       const { replicasPerNode: _rpn, deployNodeIds: _dni, ...dbInput } = input;
 
+      const { encryptEnvVars } = await import('../crypto');
+      const envVars = encryptEnvVars(dbInput.envVars);
+
       const [service] = await ctx.db
         .insert(services)
         .values({
           ...dbInput,
+          envVars,
           buildNodeId,
           targetNodeId,
           deployNodeIds,
@@ -197,9 +204,15 @@ export const serviceRouter = createRouter({
         throw new Error('Service not found');
       }
 
+      const updateData: any = { ...data, updatedAt: new Date() };
+      if (data.envVars) {
+        const { encryptEnvVars } = await import('../crypto');
+        updateData.envVars = encryptEnvVars(data.envVars);
+      }
+
       const [updated] = await ctx.db
         .update(services)
-        .set({ ...data, updatedAt: new Date() })
+        .set(updateData)
         .where(eq(services.id, id))
         .returning();
 
@@ -325,8 +338,8 @@ export const serviceRouter = createRouter({
         privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
       };
 
-      // Build env args from current service config (sanitize to prevent injection)
-      const envVars = (service.envVars as Record<string, string>) || {};
+      const { decryptEnvVars } = await import('../crypto');
+      const envVars = decryptEnvVars(service.envVars);
       const envArgs = Object.entries(envVars)
         .map(([k, v]) => {
           const safe = sanitizeEnvPair(k, v);
