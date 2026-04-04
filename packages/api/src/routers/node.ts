@@ -459,6 +459,8 @@ export const nodeRouter = createRouter({
           runtimeType: result.runtimeType || 'host',
           hasTailscale: result.hasTailscale || false,
           tailscaleIp: result.tailscaleIp || null,
+          swarmStatus: (result.swarmStatus as any) || 'unknown',
+          swarmNodeId: result.swarmNodeId || null,
           resources: {
             cpuCores: result.cpuCores,
             memoryTotal: result.memoryTotal,

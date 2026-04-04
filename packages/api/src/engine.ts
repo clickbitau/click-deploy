@@ -500,6 +500,8 @@ export class DeploymentEngine {
     runtimeType?: string;
     hasTailscale?: boolean;
     tailscaleIp?: string;
+    swarmStatus?: string;
+    swarmNodeId?: string;
   }> {
     try {
       const sshConfig = {
@@ -537,6 +539,8 @@ export class DeploymentEngine {
       let runtimeType = 'host';
       let hasTailscale = false;
       let tailscaleIp: string | undefined;
+      let swarmStatus = 'unknown';
+      let swarmNodeId: string | undefined;
 
       if (isWindows) {
         // ── Windows (OpenSSH / WSL boundary) ──────────────
@@ -607,6 +611,20 @@ export class DeploymentEngine {
         tailscaleIp = hasTailscale ? tsOut : undefined;
       }
 
+      // Universal Swarm Check (works cross-platform)
+      const swarmCheck = await sshManager.exec(sshConfig, "docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo unknown");
+      const swarmStateRaw = swarmCheck.stdout.trim().toLowerCase();
+      
+      if (swarmStateRaw === 'active') {
+        swarmStatus = 'active';
+        const swarmIdCheck = await sshManager.exec(sshConfig, "docker info --format '{{.Swarm.NodeID}}' 2>/dev/null");
+        swarmNodeId = swarmIdCheck.stdout.trim() || undefined;
+      } else if (swarmStateRaw === 'inactive' || swarmStateRaw === 'pending') {
+        swarmStatus = 'inactive';
+      } else {
+        swarmStatus = 'unknown';
+      }
+
       return {
         success: true,
         dockerVersion: dockerVer.stdout.trim(),
@@ -617,6 +635,8 @@ export class DeploymentEngine {
         runtimeType,
         hasTailscale,
         tailscaleIp,
+        swarmStatus,
+        swarmNodeId,
       };
     } catch (err) {
       return {

@@ -19,7 +19,7 @@ import { organizations } from './auth';
 // ── Enums ──────────────────────────────────────────────────
 export const nodeRoleEnum = pgEnum('node_role', ['manager', 'worker', 'build']);
 export const nodeStatusEnum = pgEnum('node_status', ['online', 'offline', 'maintenance']);
-export const swarmStatusEnum = pgEnum('swarm_status', ['active', 'drain', 'unknown']);
+export const swarmStatusEnum = pgEnum('swarm_status', ['active', 'drain', 'unknown', 'inactive']);
 
 // ── SSH Keys ───────────────────────────────────────────────
 export const sshKeys = pgTable('ssh_keys', {
