@@ -47,8 +47,8 @@ export default function RegistryPage() {
     <div>
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Registry</h1>
-          <p className="text-sm text-white/40 mt-1">Docker image registries for build &amp; deploy</p>
+          <h1 className="text-2xl font-bold text-white tracking-tight">External Registries</h1>
+          <p className="text-sm text-white/40 mt-1">Remote credentials for Docker images & artifacts</p>
         </div>
         <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2">
           <Plus className="w-4 h-4" />
@@ -69,9 +69,9 @@ export default function RegistryPage() {
           <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-5">
             <Box className="w-8 h-8 text-white/20" />
           </div>
-          <h3 className="text-sm font-semibold text-white/60 mb-1">No registries configured</h3>
+          <h3 className="text-sm font-semibold text-white/60 mb-1">No external registry credentials</h3>
           <p className="text-xs text-white/30 mb-6 max-w-sm text-center">
-            Add a Docker registry to store your built images. A self-hosted registry is recommended for self-hosted PaaS.
+            Link external platforms to allow deployment of third party images.
           </p>
           <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2">
             <Plus className="w-4 h-4" />
@@ -147,7 +147,7 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
 }) {
   const createReg = trpc.registry.create.useMutation();
   const [name, setName] = useState('');
-  const [type, setType] = useState<'dockerhub' | 'ghcr' | 'ecr' | 'self_hosted' | 'custom'>('self_hosted');
+  const [type, setType] = useState<'dockerhub' | 'ghcr' | 'ecr' | 'self_hosted' | 'custom'>('dockerhub');
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -155,7 +155,7 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
 
   const handleClose = () => {
     setName(''); setUrl(''); setUsername(''); setPassword('');
-    setType('self_hosted'); setIsDefault(true);
+    setType('dockerhub'); setIsDefault(true);
     onClose();
   };
 
@@ -164,7 +164,6 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
     setType(t as any);
     if (t === 'dockerhub') setUrl('https://index.docker.io/v1/');
     else if (t === 'ghcr') setUrl('https://ghcr.io');
-    else if (t === 'self_hosted') setUrl('http://localhost:5000');
     else setUrl('');
   };
 
@@ -189,11 +188,10 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
 
         <FormField label="Type">
           <FormSelect value={type} onChange={(e) => handleTypeChange(e.target.value)}>
-            <option value="self_hosted">Self-Hosted (port 5000)</option>
             <option value="dockerhub">Docker Hub</option>
             <option value="ghcr">GitHub Container Registry</option>
             <option value="ecr">Amazon ECR</option>
-            <option value="custom">Custom</option>
+            <option value="custom">Custom Remote Platform</option>
           </FormSelect>
         </FormField>
 
@@ -304,11 +302,10 @@ function EditRegistrySlideOver({ open, registry, onClose, onSuccess }: {
 
         <FormField label="Type">
           <FormSelect value={type} onChange={(e) => setType(e.target.value as any)}>
-            <option value="self_hosted">Self-Hosted</option>
             <option value="dockerhub">Docker Hub</option>
             <option value="ghcr">GitHub Container Registry</option>
             <option value="ecr">Amazon ECR</option>
-            <option value="custom">Custom</option>
+            <option value="custom">Custom Remote Platform</option>
           </FormSelect>
         </FormField>
 

@@ -815,10 +815,11 @@ export class DeploymentEngine {
 
     // Attempt to inject GitHub App token for private repo access
     let authedUrl = gitUrl;
+    let githubToken: string | null | undefined = null;
     if (organizationId && gitUrl.startsWith('https://github.com')) {
-      const token = await getInstallationToken(organizationId);
-      if (token) {
-        authedUrl = gitUrl.replace('https://github.com', `https://x-access-token:${token}@github.com`);
+      githubToken = await getInstallationToken(organizationId);
+      if (githubToken) {
+        authedUrl = gitUrl.replace('https://github.com', `https://x-access-token:${githubToken}@github.com`);
         this.log(deploymentId, 'clone', 'Using GitHub App token for private repo access');
       }
     }
@@ -831,6 +832,11 @@ export class DeploymentEngine {
     const result = await sshManager.exec(sshConfig, cleanCmd);
 
     if (result.code !== 0) {
+      if (githubToken) {
+        // Prevent privileged App Tokens from bleeding into the plaintext dashboard DB
+        const safeError = result.stderr.replaceAll(githubToken, '[REDACTED_GH_TOKEN]');
+        throw new Error(`Git clone failed: ${safeError}`);
+      }
       throw new Error(`Git clone failed: ${result.stderr}`);
     }
 
