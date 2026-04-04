@@ -54,7 +54,9 @@ export const sessions = pgTable('sessions', {
   userAgent: text('user_agent'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  userIdx: index('idx_sessions_user').on(table.userId),
+}));
 
 // ── Accounts (Better-Auth — OAuth providers) ───────────────
 export const accounts = pgTable('accounts', {
@@ -71,7 +73,9 @@ export const accounts = pgTable('accounts', {
   password: text('password'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  userIdx: index('idx_accounts_user_id').on(table.userId),
+}));
 
 // ── Verifications (Better-Auth) ────────────────────────────
 export const verifications = pgTable('verifications', {

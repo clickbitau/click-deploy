@@ -11,6 +11,7 @@ import {
   integer,
   boolean,
   pgEnum,
+  index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations } from './auth';
@@ -29,7 +30,9 @@ export const sshKeys = pgTable('ssh_keys', {
   fingerprint: varchar('fingerprint', { length: 100 }),
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  orgIdx: index('idx_ssh_keys_org').on(table.organizationId),
+}));
 
 // ── Nodes ──────────────────────────────────────────────────
 export const nodes = pgTable('nodes', {
@@ -59,7 +62,10 @@ export const nodes = pgTable('nodes', {
   status: nodeStatusEnum('status').notNull().default('offline'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  orgIdx: index('idx_nodes_org').on(table.organizationId),
+  sshKeyIdx: index('idx_nodes_ssh_key').on(table.sshKeyId),
+}));
 
 // ── Relations ──────────────────────────────────────────────
 export const sshKeysRelations = relations(sshKeys, ({ one, many }) => ({

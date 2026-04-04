@@ -36,7 +36,9 @@ export const notificationChannels = pgTable('notification_channels', {
   enabled: text('enabled').notNull().default('true'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  orgIdx: index('idx_notif_ch_org').on(table.organizationId),
+}));
 
 // ── Notification Rules ─────────────────────────────────────
 export const notificationRules = pgTable('notification_rules', {
@@ -44,20 +46,25 @@ export const notificationRules = pgTable('notification_rules', {
   channelId: uuid('channel_id').notNull().references(() => notificationChannels.id, { onDelete: 'cascade' }),
   event: notificationEventEnum('event').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  channelIdx: index('idx_notif_rules_ch').on(table.channelId),
+}));
 
 // ── Audit Log ──────────────────────────────────────────────
 export const auditLogs = pgTable('audit_logs', {
   id: uuid('id').defaultRandom().primaryKey(),
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
-  action: varchar('action', { length: 100 }).notNull(), // e.g., "service.create", "deployment.trigger"
-  resourceType: varchar('resource_type', { length: 50 }).notNull(), // e.g., "service", "node", "domain"
+  action: varchar('action', { length: 100 }).notNull(),
+  resourceType: varchar('resource_type', { length: 50 }).notNull(),
   resourceId: uuid('resource_id'),
   metadata: jsonb('metadata').default({}),
   ipAddress: varchar('ip_address', { length: 45 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  orgIdx: index('idx_audit_logs_org_id').on(table.organizationId),
+  userIdx: index('idx_audit_logs_user_id').on(table.userId),
+}));
 
 // ── In-App Notifications ───────────────────────────────────
 export const inAppNotifications = pgTable('in_app_notifications', {

@@ -10,6 +10,7 @@ import {
   uuid,
   varchar,
   pgEnum,
+  index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations } from './auth';
@@ -32,7 +33,10 @@ export const domains = pgTable('domains', {
   privateKey: text('private_key_cert'),    // encrypted (renamed to avoid conflict)
   tunnelId: uuid('tunnel_id').references(() => tunnels.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  serviceIdx: index('idx_domains_service').on(table.serviceId),
+  tunnelIdx: index('idx_domains_tunnel').on(table.tunnelId),
+}));
 
 // ── Tunnels ────────────────────────────────────────────────
 export const tunnels = pgTable('tunnels', {
@@ -46,7 +50,10 @@ export const tunnels = pgTable('tunnels', {
   nodeId: uuid('node_id').references(() => nodes.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  orgIdx: index('idx_tunnels_org').on(table.organizationId),
+  nodeIdx: index('idx_tunnels_node').on(table.nodeId),
+}));
 
 // ── Tunnel Routes ──────────────────────────────────────────
 export const tunnelRoutes = pgTable('tunnel_routes', {
@@ -55,7 +62,9 @@ export const tunnelRoutes = pgTable('tunnel_routes', {
   hostname: varchar('hostname', { length: 255 }).notNull(),
   service: varchar('service', { length: 500 }).notNull(), // e.g., "http://traefik:80"
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  tunnelIdx: index('idx_tunnel_routes_tunnel').on(table.tunnelId),
+}));
 
 // ── Registries ─────────────────────────────────────────────
 export const registries = pgTable('registries', {
@@ -69,7 +78,9 @@ export const registries = pgTable('registries', {
   isDefault: boolean('is_default').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  orgIdx: index('idx_registries_org').on(table.organizationId),
+}));
 
 // ── Relations ──────────────────────────────────────────────
 export const domainsRelations = relations(domains, ({ one }) => ({

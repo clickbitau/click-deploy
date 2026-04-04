@@ -9,6 +9,7 @@ import {
   varchar,
   integer,
   pgEnum,
+  index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { services } from './projects';
@@ -61,7 +62,11 @@ export const deployments = pgTable('deployments', {
 
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
-});
+}, (table) => ({
+  serviceIdx: index('idx_deploy_service').on(table.serviceId),
+  buildNodeIdx: index('idx_deploy_build_node').on(table.buildNodeId),
+  deployNodeIdx: index('idx_deploy_deploy_node').on(table.deployNodeId),
+}));
 
 // ── Relations ──────────────────────────────────────────────
 export const deploymentsRelations = relations(deployments, ({ one }) => ({

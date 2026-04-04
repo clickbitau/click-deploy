@@ -11,6 +11,7 @@ import {
   varchar,
   integer,
   pgEnum,
+  index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations } from './auth';
@@ -35,7 +36,9 @@ export const projects = pgTable('projects', {
   environment: environmentEnum('environment').notNull().default('production'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  orgIdx: index('idx_projects_org').on(table.organizationId),
+}));
 
 // ── Services ───────────────────────────────────────────────
 export const services = pgTable('services', {
@@ -86,7 +89,9 @@ export const services = pgTable('services', {
 
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  projectIdx: index('idx_services_project').on(table.projectId),
+}));
 
 // ── Relations ──────────────────────────────────────────────
 export const projectsRelations = relations(projects, ({ one, many }) => ({
