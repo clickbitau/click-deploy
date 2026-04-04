@@ -204,7 +204,7 @@ export default function NodeDetailPage() {
               { label: 'CPU', value: cpuUsage, total: resources.cpuCores ? `${resources.cpuCores} cores` : '-', color: 'var(--color-brand-400, #38bdf8)' },
               { label: 'Memory', value: memUsage, total: resources.memoryGb ? `${resources.memoryGb} GB` : '-', color: 'var(--color-accent-400, #a78bfa)' },
               { label: 'Disk', value: diskUsage, total: resources.diskGb ? `${resources.diskGb} GB` : '-', color: 'var(--color-success-400, #4ade80)' },
-            ].map((metric) => (
+            ].map((metric: { label: string; value: number; total: string; color: string }) => (
               <div key={metric.label} className="glass-card p-5 flex flex-col items-center">
                 <div className="relative mb-3">
                   <ProgressRing value={metric.value} color={metric.color} />
@@ -330,7 +330,7 @@ export default function NodeDetailPage() {
             </h3>
             <div className="bg-black/40 rounded-lg p-4 font-mono text-xs text-white/60 border border-white/5">
               <span className="text-white/25">$</span> ssh {node.sshUser}@{node.host} -p {node.port}
-              {node.sshKey?.name && <span className="text-white/25"> -i ~/.ssh/{node.sshKey.name}</span>}
+              {node.sshKey?.name && <span className="text-white/25"> -i ~/.ssh/{String(node.sshKey.name)}</span>}
             </div>
           </div>
 

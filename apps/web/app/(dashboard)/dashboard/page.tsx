@@ -136,7 +136,7 @@ export default function DashboardPage() {
                   <div key={i} className="h-12 bg-white/5 rounded-lg animate-pulse" />
                 ))}
               </div>
-            ) : !recentDeployments || recentDeployments.length === 0 ? (
+            ) : !recentDeployments?.items || recentDeployments.items.length === 0 ? (
               <EmptyState
                 icon={Rocket}
                 title="No deployments yet"
@@ -146,7 +146,7 @@ export default function DashboardPage() {
               />
             ) : (
               <div className="divide-y divide-white/[0.03]">
-                {recentDeployments.map((deploy: any) => {
+                {recentDeployments.items.map((deploy: any) => {
                   const statusInfo = statusConfig[deploy.deployStatus] || statusConfig.failed;
                   const StatusIcon = statusInfo.icon;
                   return (

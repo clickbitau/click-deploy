@@ -148,8 +148,14 @@ export class DeploymentEngine {
             username: deployment.buildNode.sshUser,
             privateKey: decryptPrivateKey(sshKey.privateKey),
           };
-          // Best-effort: kill build processes and clean up build dir
-          await sshManager.exec(sshConfig, `pkill -f "nixpacks build.*${deploymentId}" 2>/dev/null; pkill -f "docker build.*${deploymentId}" 2>/dev/null; rm -rf /tmp/click-deploy-builds/${deploymentId} 2>/dev/null || true`).catch(() => {});
+          // Kill build processes by their build directory path (more reliable than deploymentId)
+          const buildDir = `/tmp/click-deploy-builds/${deploymentId}`;
+          await sshManager.exec(sshConfig, [
+            `pkill -9 -f "${buildDir}" 2>/dev/null`,
+            `pkill -9 -f "docker build.*${deployment.imageName || deploymentId}" 2>/dev/null`,
+            `pkill -9 -f "nixpacks build.*${buildDir}" 2>/dev/null`,
+            `rm -rf ${buildDir} 2>/dev/null`,
+          ].join('; ') + ' || true').catch(() => {});
         }
       }
     } catch { /* best-effort cleanup */ }
@@ -246,7 +252,8 @@ export class DeploymentEngine {
         } catch { /* non-fatal */ }
 
         this.log(deploymentId, 'build', `Building image: ${fullImage}`);
-        await this.dockerBuild(deploymentId, ctx.buildNode, buildDir, fullImage, ctx.service);
+        const signal = this.activeDeployments.get(deploymentId)?.signal;
+        await this.dockerBuild(deploymentId, ctx.buildNode, buildDir, fullImage, ctx.service, signal);
         this.checkCancelled(deploymentId);
 
         await updateDeployment(deploymentId, {
@@ -713,7 +720,8 @@ export class DeploymentEngine {
     node: NodeConnectionInfo,
     buildDir: string,
     imageName: string,
-    service: DeploymentContext['service']
+    service: DeploymentContext['service'],
+    signal?: AbortSignal
   ) {
     const sshConfig = {
       host: node.host,
@@ -765,7 +773,7 @@ export class DeploymentEngine {
 
       const result = await sshManager.execStream(sshConfig, cmd, (line) => {
         this.log(deploymentId, 'build', line);
-      }, { idleTimeoutMs: 1800000 }); // 30 minutes timeout
+      }, { idleTimeoutMs: 1800000, signal }); // 30 minutes timeout
 
       if (result.code !== 0) {
         throw new Error(`Docker build failed: ${result.stderr}`);
@@ -806,7 +814,7 @@ export class DeploymentEngine {
 
       const result = await sshManager.execStream(sshConfig, nixCmd, (line) => {
         this.log(deploymentId, 'build', line);
-      }, { idleTimeoutMs: 1800000 }); // 30 minutes timeout
+      }, { idleTimeoutMs: 1800000, signal }); // 30 minutes timeout
 
       if (result.code !== 0) {
         throw new Error(`Nixpacks build failed: ${result.stderr}`);

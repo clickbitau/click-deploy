@@ -419,30 +419,61 @@ export class SSHConnectionManager {
   /**
    * Execute a command over SSH with streaming output callback.
    * The onOutput callback is called with each chunk of stdout/stderr as it arrives.
+   * Supports AbortSignal for cancellation — when aborted, sends SIGKILL to the remote process.
    */
   async execStream(
     config: SSHConnectionConfig,
     command: string,
     onOutput: (line: string) => void,
-    opts?: { idleTimeoutMs?: number }
+    opts?: { idleTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<{ stdout: string; stderr: string; code: number }> {
     const client = await this.connect(config);
     const idleTimeout = opts?.idleTimeoutMs || 10 * 60 * 1000; // 10 min default
 
     return new Promise((resolve, reject) => {
+      // Check if already aborted before starting
+      if (opts?.signal?.aborted) {
+        resolve({ stdout: '', stderr: 'Cancelled before start', code: 130 });
+        return;
+      }
+
       client.exec(command, (err, stream) => {
         if (err) return reject(err);
 
         let stdout = '';
         let stderr = '';
+        let resolved = false;
         let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const finish = (code: number) => {
+          if (resolved) return;
+          resolved = true;
+          if (idleTimer) clearTimeout(idleTimer);
+          resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code });
+        };
+
+        // Wire up AbortSignal to kill the SSH stream
+        if (opts?.signal) {
+          const onAbort = () => {
+            onOutput('[cancel] ⚠ Deployment cancelled — killing build process');
+            // signal('KILL') sends SIGKILL to the remote process
+            stream.signal?.('KILL');
+            stream.close();
+            finish(137); // 137 = SIGKILL
+          };
+          if (opts.signal.aborted) {
+            onAbort();
+            return;
+          }
+          opts.signal.addEventListener('abort', onAbort, { once: true });
+        }
 
         const resetIdleTimer = () => {
           if (idleTimer) clearTimeout(idleTimer);
           idleTimer = setTimeout(() => {
             onOutput('[build] ⚠ Build timed out (no output for 10 minutes)');
             stream.close();
-            resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code: 124 }); // 124 = timeout
+            finish(124); // 124 = timeout
           }, idleTimeout);
         };
 
@@ -452,7 +483,6 @@ export class SSHConnectionManager {
           const chunk = data.toString();
           stdout += chunk;
           resetIdleTimer();
-          // Split into lines and call back for each
           chunk.split(/[\r\n]+/).filter(Boolean).forEach(line => onOutput(line));
         });
 
@@ -464,13 +494,15 @@ export class SSHConnectionManager {
         });
 
         stream.on('close', (code: number) => {
-          if (idleTimer) clearTimeout(idleTimer);
-          resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code: code ?? 0 });
+          finish(code ?? 0);
         });
 
         stream.on('error', (err: Error) => {
           if (idleTimer) clearTimeout(idleTimer);
-          reject(err);
+          if (!resolved) {
+            resolved = true;
+            reject(err);
+          }
         });
       });
     });
