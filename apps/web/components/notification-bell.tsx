@@ -185,11 +185,11 @@ export function NotificationBell() {
 
   const { data: unreadCount = 0 } = trpc.notification.inAppUnreadCount.useQuery(
     undefined,
-    { retry: 1, refetchInterval: 60000 }, // Slow poll as fallback; realtime is primary
+    { retry: 1, refetchInterval: 5000 }, // 5s poll because realtime requires authenticated Supabase connections
   );
   const { data: notifications, refetch } = trpc.notification.inAppList.useQuery(
     { limit: 50 },
-    { retry: 1, refetchInterval: 60000 },
+    { retry: 1, refetchInterval: 5000 },
   );
   const markRead = trpc.notification.inAppMarkRead.useMutation();
   const utils = trpc.useUtils();
