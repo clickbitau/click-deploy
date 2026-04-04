@@ -17,7 +17,7 @@ export interface SSHConnectionConfig {
   keepaliveInterval?: number;
   /** How many failed keepalives before considering dead. Default 3. */
   keepaliveCountMax?: number;
-  /** Connection timeout (ms). Default 15s. */
+  /** Connection timeout (ms). Default 60s. */
   connectTimeout?: number;
 }
 
@@ -100,7 +100,7 @@ export class SSHConnectionManager {
 
     return new Promise((resolve, reject) => {
       const client = new SSHClient();
-      const timeout = config.connectTimeout ?? 15_000;
+      const timeout = config.connectTimeout ?? 60_000;
 
       const timer = setTimeout(() => {
         client.end();
