@@ -391,7 +391,7 @@ export class SSHConnectionManager {
    * Execute a command on a remote node via SSH.
    * Used for Docker install checks, system info collection, etc.
    */
-  async exec(config: SSHConnectionConfig, command: string): Promise<{ stdout: string; stderr: string; code: number }> {
+  async exec(config: SSHConnectionConfig, command: string, timeoutMs = 60000): Promise<{ stdout: string; stderr: string; code: number }> {
     const client = await this.connect(config);
 
     return new Promise((resolve, reject) => {
@@ -400,6 +400,17 @@ export class SSHConnectionManager {
 
         let stdout = '';
         let stderr = '';
+        let resolved = false;
+
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        if (timeoutMs > 0) {
+          timer = setTimeout(() => {
+            if (resolved) return;
+            resolved = true;
+            stream.close();
+            resolve({ stdout: stdout.trim(), stderr: stderr.trim() + `\n[SSH] Timeout after ${timeoutMs}ms`, code: 124 });
+          }, timeoutMs);
+        }
 
         stream.on('data', (data: Buffer) => {
           stdout += data.toString();
@@ -410,6 +421,9 @@ export class SSHConnectionManager {
         });
 
         stream.on('close', (code: number) => {
+          if (resolved) return;
+          resolved = true;
+          if (timer) clearTimeout(timer);
           resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code: code ?? 0 });
         });
       });
