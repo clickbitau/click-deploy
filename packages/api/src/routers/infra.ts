@@ -152,6 +152,82 @@ export const infraRouter = createRouter({
     return { success: true };
   }),
 
+  /** Join a node to the Docker Swarm */
+  joinNodeToSwarm: adminProcedure
+    .input(z.object({
+      nodeId: z.string(),
+      role: z.enum(['manager', 'worker']).default('worker'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
+      const managerSshConfig = {
+        host: manager.host,
+        port: manager.port,
+        username: manager.sshUser,
+        privateKey: manager.privateKey,
+      };
+
+      // Get join token from the manager
+      const tokenResult = await sshManager.exec(managerSshConfig,
+        `docker swarm join-token ${input.role} -q`
+      );
+      if (tokenResult.code !== 0) {
+        throw new Error(`Failed to get swarm join token: ${tokenResult.stderr}`);
+      }
+      const token = tokenResult.stdout.trim();
+
+      // Get the manager's advertise address (Tailscale or LAN)
+      const managerAddr = `${manager.host}:2377`;
+
+      // Get the target node's SSH config
+      const targetNode = await ctx.db.query.nodes.findFirst({
+        where: and(
+          eq(nodes.id, input.nodeId),
+          eq(nodes.organizationId, ctx.session.organizationId),
+        ),
+        with: { sshKey: true },
+      });
+
+      if (!targetNode?.sshKey) {
+        throw new Error('Target node not found or has no SSH key');
+      }
+
+      // Setup Tailscale tunnel if needed
+      await setupTunnelConfig(ctx.db, ctx.session.organizationId, targetNode.host);
+
+      const targetSshConfig = {
+        host: targetNode.host,
+        port: targetNode.port,
+        username: targetNode.sshUser,
+        privateKey: decryptPrivateKey(targetNode.sshKey.privateKey),
+      };
+
+      // Check if already in swarm
+      const swarmCheck = await sshManager.exec(targetSshConfig,
+        `docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null`
+      );
+      if (swarmCheck.stdout.trim() === 'active') {
+        return { success: true, message: `${targetNode.name} is already in the Swarm` };
+      }
+
+      // Leave any old swarm state first
+      await sshManager.exec(targetSshConfig, `docker swarm leave --force 2>/dev/null || true`);
+
+      // Join the swarm — advertise the node's own IP
+      const joinResult = await sshManager.exec(targetSshConfig,
+        `docker swarm join --token ${token} --advertise-addr ${targetNode.host} ${managerAddr}`
+      );
+
+      if (joinResult.code !== 0) {
+        throw new Error(`Failed to join swarm: ${joinResult.stderr}`);
+      }
+
+      return {
+        success: true,
+        message: `${targetNode.name} joined the Swarm as ${input.role}`,
+      };
+    }),
+
   /** Deploy self-hosted Docker registry */
   deployRegistry: adminProcedure
     .input(z.object({
