@@ -903,9 +903,21 @@ export class DeploymentEngine {
       }
     }
 
-    const result = await sshManager.exec(sshConfig, `docker push ${imageName}`);
-    if (result.code !== 0) {
-      throw new Error(`Docker push failed: ${result.stderr}`);
+    // Stream push so progress is visible in real-time
+    this.log(deploymentId, 'push', `Pushing to ${registry?.url || 'registry'}...`);
+    const pushResult = await sshManager.execStream(
+      sshConfig,
+      `docker push ${imageName}`,
+      (line: string) => {
+        // Only log meaningful progress lines (skip empty lines)
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith('The push refers to')) {
+          this.log(deploymentId, 'push', trimmed);
+        }
+      }
+    );
+    if (pushResult.code !== 0) {
+      throw new Error(`Docker push failed: ${pushResult.stderr}`);
     }
 
     this.log(deploymentId, 'push', `Pushed ${imageName} to registry`, 'success');
