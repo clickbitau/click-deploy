@@ -1490,9 +1490,9 @@ function UpdatesTab() {
   // Stop polling when update is done
   useEffect(() => {
     if (updateTriggered && updateLogs.data && !updateLogs.data.running && updateLogs.data.logs.length > 0) {
-      // Give it a couple more polls to capture final output
+      // Give it a couple more polls to capture final output, then auto-refresh
       const timer = setTimeout(() => {
-        // Keep updateTriggered true so we still see the logs, but polling will stop via the running check
+        window.location.reload();
       }, 4000);
       return () => clearTimeout(timer);
     }

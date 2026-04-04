@@ -77,6 +77,9 @@ services:
     ports:
       - "${PORT:-3000}:3000"
     environment:
+      # Pass commit SHA to runtime for version display
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+
       # Database — defaults to local db service; override with external URL
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-clickdeploy}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-clickdeploy}}
 
