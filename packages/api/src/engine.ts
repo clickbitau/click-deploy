@@ -629,6 +629,36 @@ export class DeploymentEngine {
       privateKey: managerNode.privateKey,
     });
 
+    // ── Registry URL rewriting for cross-network builds ─────────────
+    // If the build node is on Tailscale (100.x.x.x) but the registry URL
+    // points to the manager's internal LAN IP (10.x.x.x), the build node
+    // can't reach it. Resolve the manager's Tailscale IP and rewrite.
+    let registryForBuild = registry
+      ? { url: registry.url, username: registry.username, password: registry.password }
+      : null;
+
+    if (registryForBuild && buildNode && this.isTailscaleIP(buildNode.host)) {
+      const registryHost = registryForBuild.url.split(':')[0];
+      if (!this.isTailscaleIP(registryHost)) {
+        // Registry is on internal network — resolve manager's Tailscale IP
+        this.log(deploymentId, 'resolve', `Build node ${buildNode.host} is on Tailscale but registry is at ${registryForBuild.url} — resolving Tailscale-routable address...`);
+        try {
+          const tsResult = await sshManager.exec(
+            { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: managerNode.privateKey },
+            'tailscale ip -4 2>/dev/null'
+          );
+          const managerTsIP = tsResult.stdout.trim();
+          if (managerTsIP && managerTsIP.startsWith('100.')) {
+            const registryPort = registryForBuild.url.split(':')[1] || '5000';
+            registryForBuild = { ...registryForBuild, url: `${managerTsIP}:${registryPort}` };
+            this.log(deploymentId, 'resolve', `Registry rewritten to ${registryForBuild.url} (manager Tailscale IP)`);
+          }
+        } catch (e) {
+          this.log(deploymentId, 'resolve', `Could not resolve manager Tailscale IP — using original registry URL`, 'error');
+        }
+      }
+    }
+
     const context: DeploymentContext = {
       deploymentId,
       service: {
@@ -654,9 +684,7 @@ export class DeploymentEngine {
       buildNode,
       deployNode,
       managerNode,
-      registry: registry
-        ? { url: registry.url, username: registry.username, password: registry.password }
-        : null,
+      registry: registryForBuild,
       branch: deployment.branch || deployment.service.gitBranch || 'main',
       commitSha: deployment.commitSha,
       organizationId: deployment.service.project.organizationId,
@@ -1095,6 +1123,10 @@ export class DeploymentEngine {
     }
 
     this.log(deploymentId, 'deploy', `Service ${serviceName} deployed`, 'success');
+  }
+
+  private isTailscaleIP(host: string): boolean {
+    return host.startsWith('100.');
   }
 
   private getSwarmServiceName(service: DeploymentContext['service']): string {
