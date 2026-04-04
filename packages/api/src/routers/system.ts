@@ -35,18 +35,24 @@ export const systemRouter = createRouter({
   version: protectedProcedure
     .query(async () => {
       let version = '0.1.0';
-      let commitSha = 'unknown';
+      let commitSha = process.env.GIT_COMMIT_SHA || 'unknown';
       try {
         const fs = await import('fs');
-        const path = await import('path');
-        const pkgPath = path.resolve('/opt/click-deploy/package.json');
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-        version = pkg.version || version;
+        // Try /app (Docker container) first, then /opt/click-deploy (host)
+        for (const p of ['/app/package.json', '/opt/click-deploy/package.json']) {
+          try {
+            const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
+            if (pkg.version) { version = pkg.version; break; }
+          } catch {}
+        }
       } catch {}
-      try {
-        const { execSync } = await import('child_process');
-        commitSha = execSync('git rev-parse --short HEAD 2>/dev/null || echo unknown', { cwd: '/opt/click-deploy' }).toString().trim();
-      } catch {}
+      // Fallback: try git if env var is missing
+      if (commitSha === 'unknown') {
+        try {
+          const { execSync } = await import('child_process');
+          commitSha = execSync('git rev-parse --short HEAD 2>/dev/null', { cwd: '/opt/click-deploy' }).toString().trim() || 'unknown';
+        } catch {}
+      }
       return { version, commitSha };
     }),
 

@@ -22,6 +22,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: migrator
+      args:
+        GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     container_name: click-deploy-migrate
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
@@ -34,6 +36,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     container_name: click-deploy-app
     restart: unless-stopped
     depends_on:

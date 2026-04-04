@@ -52,6 +52,10 @@ COPY . .
 # Runtime env vars override these via docker-compose
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Capture commit SHA for version display
+ARG GIT_COMMIT_SHA=unknown
+ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
+
 # Build the monorepo (NODE_ENV=production set AFTER build so devDeps are usable)
 RUN pnpm build
 
@@ -76,6 +80,13 @@ RUN adduser --system --uid 1001 nextjs
 COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
+
+# Copy package.json for version reads
+COPY --from=builder /app/package.json ./package.json
+
+# Pass commit SHA to runtime
+ARG GIT_COMMIT_SHA=unknown
+ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
 
 # Copy entrypoint script
 COPY --from=builder --chown=nextjs:nodejs /app/docker-entrypoint.sh ./docker-entrypoint.sh
