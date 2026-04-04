@@ -502,7 +502,7 @@ export class RegistryManager {
       `docker service create`,
       `--name ${serviceName}`,
       `--mode global`,
-      `--publish 5000:5000`,
+      `--publish mode=host,published=5000,target=5000`,
       `--network click-deploy-net`,
       `--env REGISTRY_STORAGE_DELETE_ENABLED=true`,
       `--env REGISTRY_STORAGE=s3`,
