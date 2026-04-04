@@ -66,10 +66,11 @@ export default function NodeDetailPage() {
   const router = useRouter();
   const nodeId = params.id as string;
 
-  const { data: node, isLoading, refetch } = trpc.node.byId.useQuery(
+  const { data: rawNode, isLoading, refetch } = trpc.node.byId.useQuery(
     { id: nodeId },
     { retry: 1, enabled: !!nodeId }
   );
+  const node = rawNode as any;
   const deleteNode = trpc.node.delete.useMutation();
   const testConn = trpc.node.testConnectivity.useMutation();
 
@@ -275,15 +276,15 @@ export default function NodeDetailPage() {
               <div className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-xs text-white/30">Host</span>
-                  <span className="text-xs text-white/60 font-mono">{node.host}</span>
+                  <span className="text-xs text-white/60 font-mono">{String(node.host)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-xs text-white/30">Port</span>
-                  <span className="text-xs text-white/60 font-mono">{node.port}</span>
+                  <span className="text-xs text-white/60 font-mono">{String(node.port)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-xs text-white/30">SSH User</span>
-                  <span className="text-xs text-white/60 font-mono">{node.sshUser}</span>
+                  <span className="text-xs text-white/60 font-mono">{String(node.sshUser)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-xs text-white/30">SSH Key</span>
@@ -298,34 +299,34 @@ export default function NodeDetailPage() {
             <div className="glass-card p-5">
               <h3 className="text-xs text-white/40 uppercase tracking-wider font-medium mb-4">Infrastructure</h3>
               <div className="space-y-3">
-                {resources.region && (
+                {resources.region ? (
                   <div className="flex justify-between">
                     <span className="text-xs text-white/30">Region</span>
                     <span className="text-xs text-white/60 flex items-center gap-1">
                       <MapPin className="w-3 h-3" />{String(resources.region)}
                     </span>
                   </div>
-                )}
-                {resources.provider && (
+                ) : null}
+                {resources.provider ? (
                   <div className="flex justify-between">
                     <span className="text-xs text-white/30">Provider</span>
                     <span className="text-xs text-white/60 capitalize flex items-center gap-1">
                       <Cloud className="w-3 h-3" />{String(resources.provider)}
                     </span>
                   </div>
-                )}
-                {resources.datacenter && (
+                ) : null}
+                {resources.datacenter ? (
                   <div className="flex justify-between">
                     <span className="text-xs text-white/30">Datacenter</span>
                     <span className="text-xs text-white/60">{String(resources.datacenter)}</span>
                   </div>
-                )}
-                {resources.networkType && (
+                ) : null}
+                {resources.networkType ? (
                   <div className="flex justify-between">
                     <span className="text-xs text-white/30">Network</span>
                     <span className="text-xs text-white/60 capitalize">{String(resources.networkType)}</span>
                   </div>
-                )}
+                ) : null}
                 <div className="flex justify-between">
                   <span className="text-xs text-white/30">Last Heartbeat</span>
                   <span className="text-xs text-white/60">

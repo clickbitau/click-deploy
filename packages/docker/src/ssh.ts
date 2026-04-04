@@ -160,7 +160,7 @@ export class SSHConnectionManager {
         username: config.username,
         privateKey: config.privateKey,
         keepaliveInterval: config.keepaliveInterval ?? 10_000,
-        keepaliveCountMax: config.keepaliveCountMax ?? 3,
+        keepaliveCountMax: config.keepaliveCountMax ?? 10,
         readyTimeout: timeout,
         // Disable host key verification for now
         // TODO: Store and verify host keys for TOFU (Trust On First Use)
@@ -242,7 +242,7 @@ export class SSHConnectionManager {
             username: config.username,
             privateKey: config.privateKey,
             keepaliveInterval: config.keepaliveInterval ?? 10_000,
-            keepaliveCountMax: config.keepaliveCountMax ?? 3,
+            keepaliveCountMax: config.keepaliveCountMax ?? 10,
             readyTimeout: timeout,
             algorithms: {
               serverHostKey: ['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ssh-rsa'],

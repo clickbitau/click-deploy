@@ -428,8 +428,10 @@ export class RegistryManager {
         `--env REGISTRY_STORAGE_S3_ACCESSKEY=${opts!.s3!.accessKey}`,
         `--env REGISTRY_STORAGE_S3_SECRETKEY=${opts!.s3!.secretKey}`,
         `--env REGISTRY_STORAGE_S3_BUCKET=${opts!.s3!.bucket}`,
-        `--env REGISTRY_STORAGE_S3_REGION=${opts!.s3!.region}`,
+        `--env REGISTRY_STORAGE_S3_REGION=${opts!.s3!.region || 'us-east-1'}`,
         `--env REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true`,
+        // HA: shared secret for consistent uploads across replicas
+        `--env REGISTRY_HTTP_SECRET=${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`,
         // Disable in-memory cache redirect — S3 handles it
         `--env REGISTRY_STORAGE_REDIRECT_DISABLE=true`,
       );
@@ -496,6 +498,7 @@ export class RegistryManager {
     }
 
     // Create fresh service with S3 config
+    const sharedSecret = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
     const cmd = [
       `docker service create`,
       `--name ${serviceName}`,
@@ -508,9 +511,10 @@ export class RegistryManager {
       `--env REGISTRY_STORAGE_S3_ACCESSKEY=${s3Config.accessKey}`,
       `--env REGISTRY_STORAGE_S3_SECRETKEY=${s3Config.secretKey}`,
       `--env REGISTRY_STORAGE_S3_BUCKET=${s3Config.bucket}`,
-      `--env REGISTRY_STORAGE_S3_REGION=${s3Config.region}`,
+      `--env REGISTRY_STORAGE_S3_REGION=${s3Config.region || 'us-east-1'}`,
       `--env REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true`,
       `--env REGISTRY_STORAGE_REDIRECT_DISABLE=true`,
+      `--env REGISTRY_HTTP_SECRET=${sharedSecret}`,
       `--label traefik.enable=false`,
       `registry:2`,
     ].join(' ');

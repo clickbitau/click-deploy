@@ -18,12 +18,9 @@ async function getPrimaryManagerNode(ctx: { db: typeof import('@click-deploy/dat
     where: eq(nodes.organizationId, ctx.session.organizationId),
   });
   
-  // Try online managers first, then any manager
+  // Try online managers only
   const managers = orgNodes.filter((n) => n.role === 'manager');
-  const candidates = [
-    ...managers.filter((n) => n.status === 'online'),
-    ...managers.filter((n) => n.status !== 'online')
-  ];
+  const candidates = managers.filter((n) => n.status === 'online');
 
   for (const node of candidates) {
     const keyRecord = await ctx.db.query.sshKeys.findFirst({
