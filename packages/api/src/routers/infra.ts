@@ -310,6 +310,14 @@ export const infraRouter = createRouter({
         }, 'nixpacks --version 2>/dev/null || echo "not installed"').then(r => r.stdout.trim())
       ]);
 
+      // Log any failures for debugging
+      if (traefikStatus.status === 'rejected') {
+        console.error('[infra.status] Traefik check failed:', traefikStatus.reason);
+      }
+      if (registryStatus.status === 'rejected') {
+        console.error('[infra.status] Registry check failed:', registryStatus.reason);
+      }
+
       const regStatus = registryStatus.status === 'fulfilled'
         ? registryStatus.value
         : { running: false, replicas: 0, storageMode: 'unknown' as const };
@@ -329,7 +337,8 @@ export const infraRouter = createRouter({
           : { installed: false, running: false, authenticated: false },
         nixpacks: nixpacksStatus.status === 'fulfilled' ? nixpacksStatus.value : 'unknown',
       };
-    } catch {
+    } catch (err) {
+      console.error('[infra.status] Failed to get infrastructure status:', err);
       return {
         managerNode: null,
         managerNodes: [],
