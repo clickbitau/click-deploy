@@ -412,7 +412,7 @@ export class RegistryManager {
     const cmdParts: string[] = [
       `docker service create`,
       `--name ${serviceName}`,
-      `--publish 5000:5000`,
+      `--publish mode=host,published=5000,target=5000`,
       `--network click-deploy-net`,
     ];
 
