@@ -154,14 +154,14 @@ export const deploymentRouter = createRouter({
 
       let buildNodeId = service.buildNodeId;
       if (service.sourceType === 'git') {
-        const buildCapable = orgNodes.filter((n: any) => n.canBuild && n.status === 'online');
+        const buildCapable = orgNodes.filter((n) => n.canBuild && n.status === 'online');
         if (buildCapable.length > 0) {
           // Prefer the configured one if it's still capable, otherwise pick first capable
-          const configured = buildCapable.find((n: any) => n.id === service.buildNodeId);
+          const configured = buildCapable.find((n) => n.id === service.buildNodeId);
           buildNodeId = configured ? configured.id : buildCapable[0]!.id;
         } else if (orgNodes.length > 0) {
           // Fallback: any online node
-          const online = orgNodes.filter((n: any) => n.status === 'online');
+          const online = orgNodes.filter((n) => n.status === 'online');
           buildNodeId = online.length > 0 ? online[0]!.id : orgNodes[0]!.id;
         }
         // Update the service's buildNodeId if it changed
@@ -175,7 +175,7 @@ export const deploymentRouter = createRouter({
       // ── Auto-resolve deploy node ─────────────────────────
       let deployNodeId = service.targetNodeId;
       if (!deployNodeId) {
-        const deployCap = orgNodes.filter((n: any) => n.canDeploy && n.status === 'online');
+        const deployCap = orgNodes.filter((n) => n.canDeploy && n.status === 'online');
         deployNodeId = deployCap.length > 0 ? deployCap[0]!.id : orgNodes[0]?.id ?? null;
       }
 

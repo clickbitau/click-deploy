@@ -131,7 +131,7 @@ export const domainRouter = createRouter({
  * Called when domains are added or removed.
  */
 async function updateTraefikForService(
-  db: any,
+  db: typeof import('@click-deploy/database').db,
   serviceId: string,
   organizationId: string,
 ): Promise<void> {
@@ -168,12 +168,12 @@ async function updateTraefikForService(
   const containerPort = (service.ports as any[])?.[0]?.container || 3000;
 
   // 4. Build the Traefik labels from current domains
-  const routes: TraefikRouteConfig[] = serviceDomains.map((d: any, idx: number) => ({
+  const routes: TraefikRouteConfig[] = serviceDomains.map((d: typeof domains.$inferSelect, idx: number) => ({
     routerName: idx === 0 ? swarmServiceName : `${swarmServiceName}-${idx}`,
     hostname: d.hostname,
     targetPort: containerPort,
     sslEnabled: d.sslEnabled,
-    sslProvider: d.sslProvider,
+    sslProvider: (d.sslProvider as "custom" | "letsencrypt" | "cloudflare" | "none") || undefined,
   }));
 
   const labels = serviceDomains.length > 0

@@ -60,7 +60,7 @@ const INFRA_COMPONENTS = {
 /**
  * Helper: Get the manager node with decrypted SSH key.
  */
-async function getManagerNode(db: any, organizationId: string) {
+async function getManagerNode(db: typeof import('@click-deploy/database').db, organizationId: string) {
   const node = await db.query.nodes.findFirst({
     where: and(
       eq(nodes.organizationId, organizationId),
@@ -87,7 +87,7 @@ async function getManagerNode(db: any, organizationId: string) {
 /**
  * Helper: Set up the SSH manager with Tailscale tunnel config if needed.
  */
-async function setupTunnelConfig(db: any, organizationId: string, targetHost: string) {
+async function setupTunnelConfig(db: typeof import('@click-deploy/database').db, organizationId: string, targetHost: string) {
   const managerNode = await db.query.nodes.findFirst({
     where: and(
       eq(nodes.organizationId, organizationId),

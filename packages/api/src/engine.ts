@@ -46,8 +46,8 @@ interface DeploymentContext {
     envVars: Record<string, string>;
     ports: Array<{ host?: number; container: number; protocol: string }>;
     replicas: number;
-    healthCheck: { path?: string; interval?: number; timeout?: number; retries?: number } | null;
-    resourceLimits: { cpuCores?: number; memoryLimit?: number; memoryUsed?: number } | null;
+    healthCheck: any;
+    resourceLimits: any;
     labels: Record<string, string>;
     swarmServiceId: string | null;
     projectId: string;
@@ -704,8 +704,8 @@ export class DeploymentEngine {
         envVars: (deployment.service.envVars as Record<string, string>) || {},
         ports: (deployment.service.ports as any[]) || [],
         replicas: deployment.service.replicas,
-        healthCheck: deployment.service.healthCheck,
-        resourceLimits: deployment.service.resourceLimits,
+        healthCheck: deployment.service.healthCheck as any,
+        resourceLimits: deployment.service.resourceLimits as any,
         labels: (deployment.service.labels as Record<string, string>) || {},
         swarmServiceId: deployment.service.swarmServiceId,
         projectId: deployment.service.projectId,

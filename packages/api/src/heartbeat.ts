@@ -103,7 +103,7 @@ async function runHeartbeat() {
 /**
  * Poll a single node for resource usage.
  */
-async function pollNode(node: any, sshKey: any) {
+async function pollNode(node: typeof nodes.$inferSelect, sshKey: typeof sshKeys.$inferSelect) {
   if (!sshKey) {
     console.warn(`[heartbeat] Node ${node.name} has no SSH key`);
     return;

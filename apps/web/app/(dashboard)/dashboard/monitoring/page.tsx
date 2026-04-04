@@ -41,6 +41,15 @@ function ProgressBar({ value }: { value: number }) {
   );
 }
 
+type NodeResourceInfo = {
+  cpuCores?: number;
+  cpuUsage?: number;
+  memoryTotal?: number;
+  memoryUsed?: number;
+  diskTotal?: number;
+  diskUsed?: number;
+};
+
 export default function MonitoringPage() {
   const { data: nodes, isLoading, refetch } = trpc.node.list.useQuery(undefined, { retry: 1, refetchInterval: 30000 });
   const { data: clusterStats } = trpc.node.clusterStats.useQuery(undefined, { retry: 1, refetchInterval: 30000 });
@@ -54,19 +63,19 @@ export default function MonitoringPage() {
   }, []);
 
   // Aggregate metrics from real node data — CPU weighted by core count
-  const allNodes = nodes || [];
-  const totalCores = allNodes.reduce((sum: number, n: any) => sum + ((n.resources as any)?.cpuCores || 1), 0);
-  const weightedCpuSum = allNodes.reduce((sum: number, n: any) => {
-    const cores = (n.resources as any)?.cpuCores || 1;
-    const usage = (n.resources as any)?.cpuUsage || 0;
+  const allNodes = (nodes || []) as Array<{ resources: NodeResourceInfo | null }>;
+  const totalCores = allNodes.reduce((sum, n) => sum + (n.resources?.cpuCores ?? 1), 0);
+  const weightedCpuSum = allNodes.reduce((sum, n) => {
+    const cores = n.resources?.cpuCores ?? 1;
+    const usage = n.resources?.cpuUsage ?? 0;
     return sum + (usage * cores);
   }, 0);
   const aggregateCpu = totalCores > 0 ? Math.round(weightedCpuSum / totalCores) : 0;
-  const totalMem = allNodes.reduce((sum: number, n: any) => sum + ((n.resources as any)?.memoryTotal || 0), 0);
-  const usedMem = allNodes.reduce((sum: number, n: any) => sum + ((n.resources as any)?.memoryUsed || 0), 0);
+  const totalMem = allNodes.reduce((sum, n) => sum + (n.resources?.memoryTotal ?? 0), 0);
+  const usedMem = allNodes.reduce((sum, n) => sum + (n.resources?.memoryUsed ?? 0), 0);
   const memPct = totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0;
-  const totalDisk = allNodes.reduce((sum: number, n: any) => sum + ((n.resources as any)?.diskTotal || 0), 0);
-  const usedDisk = allNodes.reduce((sum: number, n: any) => sum + ((n.resources as any)?.diskUsed || 0), 0);
+  const totalDisk = allNodes.reduce((sum, n) => sum + (n.resources?.diskTotal ?? 0), 0);
+  const usedDisk = allNodes.reduce((sum, n) => sum + (n.resources?.diskUsed ?? 0), 0);
   const diskPct = totalDisk > 0 ? Math.round((usedDisk / totalDisk) * 100) : 0;
 
   const formatBytes = (bytes: number) => {

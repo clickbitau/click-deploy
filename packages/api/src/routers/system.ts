@@ -13,16 +13,16 @@ import { randomBytes } from 'crypto';
  * Finds the actual manager node that hosts the Click-Deploy source code installation.
  * It checks manager nodes until it finds one with /opt/click-deploy present.
  */
-async function getPrimaryManagerNode(ctx: any) {
+async function getPrimaryManagerNode(ctx: { db: typeof import('@click-deploy/database').db; session: { organizationId: string } }) {
   const orgNodes = await ctx.db.query.nodes.findMany({
     where: eq(nodes.organizationId, ctx.session.organizationId),
   });
   
   // Try online managers first, then any manager
-  const managers = orgNodes.filter((n: any) => n.role === 'manager');
+  const managers = orgNodes.filter((n) => n.role === 'manager');
   const candidates = [
-    ...managers.filter((n: any) => n.status === 'online'),
-    ...managers.filter((n: any) => n.status !== 'online')
+    ...managers.filter((n) => n.status === 'online'),
+    ...managers.filter((n) => n.status !== 'online')
   ];
 
   for (const node of candidates) {
@@ -49,7 +49,7 @@ async function getPrimaryManagerNode(ctx: any) {
 }
 
 // ── SMTP helper ─────────────────────────────────────────────
-async function sendEmail(smtpConfig: any, to: string, subject: string, html: string) {
+async function sendEmail(smtpConfig: { host: string; port: number | string; user: string; password: string; from: string }, to: string, subject: string, html: string) {
   // Dynamic import to avoid bundling issues
   const nodemailer = await import('nodemailer');
   const transport = nodemailer.createTransport({
