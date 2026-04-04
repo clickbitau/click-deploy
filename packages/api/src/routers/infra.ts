@@ -423,13 +423,25 @@ export const infraRouter = createRouter({
         ? registryStatus.value
         : { running: false, replicas: 0, storageMode: 'unknown' as const, mode: 'unknown' as const };
 
+      // Use DB-stored registry URL (correct for global-mode registries)
+      let registryUrl = regStatus.running ? registry.getRegistryUrl() : undefined;
+      try {
+        const dbRegistry = await ctx.db.query.registries.findFirst({
+          where: and(
+            eq(registries.organizationId, ctx.session.organizationId),
+            eq(registries.isDefault, true),
+          ),
+        });
+        if (dbRegistry?.url) registryUrl = dbRegistry.url;
+      } catch { /* fall back to dynamic URL */ }
+
       return {
         managerNode: { name: manager.name, host: manager.host },
         managerNodes: allManagers.map(m => ({ name: m.name, host: m.host })),
         traefik: traefikStatus.status === 'fulfilled' ? traefikStatus.value : { running: false },
         registry: {
           running: regStatus.running,
-          url: regStatus.running ? registry.getRegistryUrl() : undefined,
+          url: registryUrl,
           replicas: regStatus.replicas,
           storageMode: regStatus.storageMode,
           mode: regStatus.mode,

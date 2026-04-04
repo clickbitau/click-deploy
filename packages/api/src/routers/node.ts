@@ -136,6 +136,11 @@ export const nodeRouter = createRouter({
             await ctx.db.update(nodes).set({
               status: 'online',
               dockerVersion: result.dockerVersion,
+              runtimeType: result.runtimeType || 'host',
+              hasTailscale: result.hasTailscale || false,
+              tailscaleIp: result.tailscaleIp || null,
+              swarmStatus: (result.swarmStatus as any) || 'unknown',
+              swarmNodeId: result.swarmNodeId || null,
               resources: {
                 cpuCores: result.cpuCores,
                 memoryTotal: result.memoryTotal,

@@ -229,7 +229,7 @@ export default function MonitoringPage() {
                     <Server className="w-4 h-4 text-white/30" />
                     <span className="text-sm font-medium text-white/80">{node.name}</span>
                     <span className={`w-2 h-2 rounded-full ${statusDot}`} title={node.status} />
-                    {node.hasTailscale === false && (
+                    {!node.hasTailscale && (
                       <div className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-warning-500/20 bg-warning-500/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_1px_4px_rgba(0,0,0,0.2)]">
                         <span className="text-warning-500 text-[10px] uppercase font-bold tracking-wider">Tailscale Missing</span>
                         <div className="group relative flex items-center">

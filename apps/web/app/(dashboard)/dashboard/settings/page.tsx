@@ -97,7 +97,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Content */}
-        <div className="flex-1 max-w-2xl">
+        <div className="flex-1 max-w-3xl">
           {activeTab === 'infrastructure' && <InfrastructureTab />}
           {activeTab === 'storage' && <StorageTab />}
 
