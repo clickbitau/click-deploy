@@ -225,7 +225,23 @@ export default function MonitoringPage() {
                   <div className="flex items-center gap-3 mb-3">
                     <Server className="w-4 h-4 text-white/30" />
                     <span className="text-sm font-medium text-white/80">{node.name}</span>
-                    <span className={`w-2 h-2 rounded-full ${statusDot}`} />
+                    <span className={`w-2 h-2 rounded-full ${statusDot}`} title={node.status} />
+                    {node.hasTailscale === false && (
+                      <div className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-warning-500/20 bg-warning-500/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_1px_4px_rgba(0,0,0,0.2)]">
+                        <span className="text-warning-500 text-[10px] uppercase font-bold tracking-wider">Tailscale Missing</span>
+                        <div className="group relative flex items-center">
+                          <AlertTriangle className="w-3 h-3 text-warning-400 cursor-help" />
+                          <div className="absolute right-0 bottom-full mb-2 hidden group-hover:block w-72 p-3 bg-gray-900 border border-white/10 rounded-lg shadow-xl z-50 pointer-events-none">
+                            <p className="text-[10px] text-white/70 font-medium mb-2 normal-case leading-relaxed">
+                              Split-brain network risk! This node cannot communicate with the rest of your Swarm securely. Run this over SSH to fix:
+                            </p>
+                            <code className="block bg-black/50 p-2 rounded text-[9px] text-brand-300 font-mono select-all normal-case">
+                              curl -fsSL https://tailscale.com/install.sh | sh && tailscale up --ssh
+                            </code>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="grid grid-cols-3 gap-6">
                     <div>
