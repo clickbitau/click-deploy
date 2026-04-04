@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { nodes, registries } from '@click-deploy/database';
 import { createRouter, adminProcedure } from '../trpc';
-import { TraefikManager, RegistryManager, TailscaleManager, sshManager } from '@click-deploy/docker';
+import { TraefikManager, RegistryManager, TailscaleManager, sshManager, type RegistryS3Config } from '@click-deploy/docker';
 import { decryptPrivateKey } from '../crypto';
 
 // ── Docker Hub API helpers ─────────────────────────────────
@@ -157,6 +157,14 @@ export const infraRouter = createRouter({
     .input(z.object({
       name: z.string().default('Self-Hosted Registry'),
       hostname: z.string().optional(),
+      s3: z.object({
+        endpoint: z.string().min(1),
+        accessKey: z.string().min(1),
+        secretKey: z.string().min(1),
+        bucket: z.string().min(1),
+        region: z.string().default('us-east-1'),
+      }).optional(),
+      replicas: z.number().int().min(1).max(5).default(2),
     }))
     .mutation(async ({ ctx, input }) => {
       const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
@@ -165,6 +173,8 @@ export const infraRouter = createRouter({
       const result = await registry.deploy({
         hostname: input.hostname,
         sslEnabled: !!input.hostname,
+        s3: input.s3 as RegistryS3Config | undefined,
+        replicas: input.s3 ? input.replicas : undefined,
       });
 
       if (result.created) {
@@ -180,8 +190,40 @@ export const infraRouter = createRouter({
       return {
         ...result,
         message: result.created
-          ? `Registry deployed at ${result.registryUrl}`
+          ? `Registry deployed at ${result.registryUrl} (${result.storageMode} storage)`
           : 'Registry already running.',
+      };
+    }),
+
+  /** Migrate existing registry to S3-backed HA mode */
+  configureRegistryS3: adminProcedure
+    .input(z.object({
+      endpoint: z.string().min(1),
+      accessKey: z.string().min(1),
+      secretKey: z.string().min(1),
+      bucket: z.string().min(1),
+      region: z.string().default('us-east-1'),
+      replicas: z.number().int().min(1).max(5).default(2),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
+      const registry = new RegistryManager(manager);
+
+      const result = await registry.migrateToS3({
+        endpoint: input.endpoint,
+        accessKey: input.accessKey,
+        secretKey: input.secretKey,
+        bucket: input.bucket,
+        region: input.region,
+      }, {
+        replicas: input.replicas,
+      });
+
+      return {
+        ...result,
+        message: result.success
+          ? `Registry migrated to S3-backed HA mode (${input.replicas} replicas)`
+          : 'Migration failed — registry may need manual recovery.',
       };
     }),
 
@@ -190,13 +232,15 @@ export const infraRouter = createRouter({
     try {
       const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
       const registry = new RegistryManager(manager);
-      const running = await registry.isRunning();
+      const status = await registry.getStatus();
       return {
-        running,
-        url: running ? registry.getRegistryUrl() : undefined,
+        running: status.running,
+        url: status.running ? registry.getRegistryUrl() : undefined,
+        replicas: status.replicas,
+        storageMode: status.storageMode,
       };
     } catch {
-      return { running: false };
+      return { running: false, replicas: 0, storageMode: 'unknown' as const };
     }
   }),
 
@@ -254,9 +298,9 @@ export const infraRouter = createRouter({
       const registry = new RegistryManager(manager);
       const tailscale = new TailscaleManager(manager);
 
-      const [traefikStatus, registryRunning, tailscaleStatus, nixpacksStatus] = await Promise.allSettled([
+      const [traefikStatus, registryStatus, tailscaleStatus, nixpacksStatus] = await Promise.allSettled([
         traefik.getStatus(),
-        registry.isRunning(),
+        registry.getStatus(),
         tailscale.getStatus(),
         sshManager.exec({
           host: manager.host,
@@ -266,15 +310,19 @@ export const infraRouter = createRouter({
         }, 'nixpacks --version 2>/dev/null || echo "not installed"').then(r => r.stdout.trim())
       ]);
 
+      const regStatus = registryStatus.status === 'fulfilled'
+        ? registryStatus.value
+        : { running: false, replicas: 0, storageMode: 'unknown' as const };
+
       return {
         managerNode: { name: manager.name, host: manager.host },
         managerNodes: allManagers.map(m => ({ name: m.name, host: m.host })),
         traefik: traefikStatus.status === 'fulfilled' ? traefikStatus.value : { running: false },
         registry: {
-          running: registryRunning.status === 'fulfilled' ? registryRunning.value : false,
-          url: registryRunning.status === 'fulfilled' && registryRunning.value
-            ? registry.getRegistryUrl()
-            : undefined,
+          running: regStatus.running,
+          url: regStatus.running ? registry.getRegistryUrl() : undefined,
+          replicas: regStatus.replicas,
+          storageMode: regStatus.storageMode,
         },
         tailscale: tailscaleStatus.status === 'fulfilled'
           ? tailscaleStatus.value
@@ -286,7 +334,7 @@ export const infraRouter = createRouter({
         managerNode: null,
         managerNodes: [],
         traefik: { running: false },
-        registry: { running: false },
+        registry: { running: false, replicas: 0, storageMode: 'unknown' as const },
         tailscale: { installed: false, running: false, authenticated: false },
         nixpacks: 'unknown',
       };

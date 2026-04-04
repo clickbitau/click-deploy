@@ -11,6 +11,7 @@ export {
   generateSimpleTraefikLabels,
   type TraefikConfig,
   type TraefikRouteConfig,
+  type RegistryS3Config,
 } from './traefik';
 export { TailscaleManager, type TailscaleStatus } from './tailscale';
 

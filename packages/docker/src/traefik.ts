@@ -338,6 +338,14 @@ export class TraefikManager {
 
 // ── Self-Hosted Docker Registry ─────────────────────────────
 
+export interface RegistryS3Config {
+  endpoint: string;     // e.g. https://xxx.supabase.co/storage/v1/s3
+  accessKey: string;
+  secretKey: string;
+  bucket: string;       // e.g. docker-registry
+  region: string;       // e.g. us-east-1 (Supabase uses us-east-1 format)
+}
+
 export class RegistryManager {
   constructor(private managerNode: NodeConnectionInfo) {}
 
@@ -352,14 +360,20 @@ export class RegistryManager {
 
   /**
    * Deploy a self-hosted Docker registry as a Swarm service.
-   * Runs on port 5000, persisted via Docker volume.
+   *
+   * Two storage modes:
+   * - **Local volume** (default): single-node, data on manager disk
+   * - **S3-backed** (HA): replicated across nodes, data in S3-compatible bucket
    */
   async deploy(opts?: {
     hostname?: string;
     sslEnabled?: boolean;
-  }): Promise<{ created: boolean; updated: boolean; registryUrl: string }> {
+    s3?: RegistryS3Config;
+    replicas?: number;
+  }): Promise<{ created: boolean; updated: boolean; registryUrl: string; storageMode: 'local' | 's3' }> {
     const serviceName = 'click-deploy-registry';
     const registryUrl = `${this.managerNode.host}:5000`;
+    const useS3 = !!opts?.s3;
 
     // Check if already running
     const inspect = await sshManager.exec(this.sshConfig,
@@ -368,13 +382,8 @@ export class RegistryManager {
     const exists = inspect.code === 0 && inspect.stdout.trim().length > 0;
 
     if (exists) {
-      return { created: false, updated: false, registryUrl };
+      return { created: false, updated: false, registryUrl, storageMode: useS3 ? 's3' : 'local' };
     }
-
-    // Create volume for registry data
-    await sshManager.exec(this.sshConfig,
-      `docker volume create click-deploy-registry-data 2>/dev/null || true`
-    );
 
     // Ensure overlay network
     await sshManager.exec(this.sshConfig,
@@ -386,7 +395,6 @@ export class RegistryManager {
       `--label traefik.enable=${opts?.hostname ? 'true' : 'false'}`,
     ];
 
-    // If a hostname is provided, configure Traefik routing for the registry
     if (opts?.hostname) {
       labels.push(
         `--label 'traefik.http.routers.registry.rule=Host(\`${opts.hostname}\`)'`,
@@ -397,14 +405,49 @@ export class RegistryManager {
       );
     }
 
-    const cmd = [
+    const envVars: string[] = [
+      `--env REGISTRY_STORAGE_DELETE_ENABLED=true`,
+    ];
+
+    const cmdParts: string[] = [
       `docker service create`,
       `--name ${serviceName}`,
-      `--constraint 'node.role == manager'`,
       `--publish 5000:5000`,
-      `--mount type=volume,source=click-deploy-registry-data,target=/var/lib/registry`,
       `--network click-deploy-net`,
-      `--env REGISTRY_STORAGE_DELETE_ENABLED=true`,
+    ];
+
+    if (useS3) {
+      // ── S3-backed HA mode ──
+      // No constraint → can run on any node
+      // Replicated → multiple instances for HA
+      cmdParts.push(`--replicas ${opts?.replicas ?? 2}`);
+
+      envVars.push(
+        `--env REGISTRY_STORAGE=s3`,
+        `--env REGISTRY_STORAGE_S3_REGIONENDPOINT=${opts!.s3!.endpoint}`,
+        `--env REGISTRY_STORAGE_S3_ACCESSKEY=${opts!.s3!.accessKey}`,
+        `--env REGISTRY_STORAGE_S3_SECRETKEY=${opts!.s3!.secretKey}`,
+        `--env REGISTRY_STORAGE_S3_BUCKET=${opts!.s3!.bucket}`,
+        `--env REGISTRY_STORAGE_S3_REGION=${opts!.s3!.region}`,
+        `--env REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true`,
+        // Disable in-memory cache redirect — S3 handles it
+        `--env REGISTRY_STORAGE_REDIRECT_DISABLE=true`,
+      );
+    } else {
+      // ── Local volume mode (original) ──
+      cmdParts.push(`--constraint 'node.role == manager'`);
+
+      await sshManager.exec(this.sshConfig,
+        `docker volume create click-deploy-registry-data 2>/dev/null || true`
+      );
+      cmdParts.push(
+        `--mount type=volume,source=click-deploy-registry-data,target=/var/lib/registry`,
+      );
+    }
+
+    const cmd = [
+      ...cmdParts,
+      ...envVars,
       ...labels,
       `registry:2`,
     ].join(' ');
@@ -414,7 +457,35 @@ export class RegistryManager {
       throw new Error(`Failed to deploy registry: ${result.stderr}`);
     }
 
-    return { created: true, updated: false, registryUrl };
+    return { created: true, updated: false, registryUrl, storageMode: useS3 ? 's3' : 'local' };
+  }
+
+  /**
+   * Migrate an existing local-volume registry to S3-backed HA mode.
+   * Removes the old service and redeploys with S3 config.
+   */
+  async migrateToS3(s3Config: RegistryS3Config, opts?: {
+    hostname?: string;
+    replicas?: number;
+  }): Promise<{ success: boolean; registryUrl: string }> {
+    const serviceName = 'click-deploy-registry';
+
+    // Remove existing service
+    await sshManager.exec(this.sshConfig,
+      `docker service rm ${serviceName} 2>/dev/null || true`
+    );
+
+    // Wait for service to fully stop
+    await new Promise(r => setTimeout(r, 3000));
+
+    // Redeploy with S3
+    const result = await this.deploy({
+      hostname: opts?.hostname,
+      s3: s3Config,
+      replicas: opts?.replicas ?? 2,
+    });
+
+    return { success: result.created, registryUrl: result.registryUrl };
   }
 
   /**
@@ -425,6 +496,32 @@ export class RegistryManager {
       `docker service inspect click-deploy-registry --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null`
     );
     return result.code === 0 && parseInt(result.stdout.trim()) > 0;
+  }
+
+  /**
+   * Get detailed status of the registry service.
+   */
+  async getStatus(): Promise<{
+    running: boolean;
+    replicas: number;
+    storageMode: 'local' | 's3' | 'unknown';
+  }> {
+    const inspect = await sshManager.exec(this.sshConfig, [
+      `docker service inspect click-deploy-registry`,
+      `--format '{{.Spec.Mode.Replicated.Replicas}}|||{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{.}} {{end}}'`,
+      `2>/dev/null`,
+    ].join(' '));
+
+    if (inspect.code !== 0) {
+      return { running: false, replicas: 0, storageMode: 'unknown' };
+    }
+
+    const parts = inspect.stdout.trim().split('|||');
+    const replicas = parseInt(parts[0] || '0');
+    const envStr = parts[1] || '';
+    const storageMode = envStr.includes('REGISTRY_STORAGE=s3') ? 's3' as const : 'local' as const;
+
+    return { running: replicas > 0, replicas, storageMode };
   }
 
   /**

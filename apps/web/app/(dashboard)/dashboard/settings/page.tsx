@@ -600,102 +600,13 @@ function InfrastructureTab() {
       </div>
 
       {/* Registry Setup */}
-      <div className="glass-card p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
-              <Container className="w-4 h-4 text-purple-400" />
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold">Self-Hosted Docker Registry</h3>
-              <p className="text-[11px] text-white/30">Stores built images on your infrastructure — no Docker Hub needed</p>
-            </div>
-          </div>
-          {status?.registry?.running && (
-            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
-              <CheckCircle className="w-3.5 h-3.5" />
-              Running
-            </span>
-          )}
-        </div>
-
-        {!status?.registry?.running && (
-          <div className="space-y-4">
-            <div className="bg-purple-500/5 border border-purple-500/10 rounded-lg p-4">
-              <div className="flex gap-3">
-                <Container className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-white/40">
-                  Deploys a Docker Registry v2 on port <code className="text-purple-400">5000</code> of your manager node.
-                  Built images are pushed here before deployment — your data stays on your infrastructure.
-                </p>
-              </div>
-            </div>
-
-            <button
-              onClick={() => deployRegistry.mutate({}, {
-                onSuccess: () => infraStatus.refetch(),
-              })}
-              disabled={deployRegistry.isPending || !status?.managerNode}
-              className="btn-primary flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {deployRegistry.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Rocket className="w-4 h-4" />
-              )}
-              {deployRegistry.isPending ? 'Deploying...' : 'Deploy Registry'}
-            </button>
-
-            {!status?.managerNode && (
-              <p className="text-[11px] text-amber-400/70">
-                ⚠ Add a manager node first before deploying the registry
-              </p>
-            )}
-          </div>
-        )}
-
-        {status?.registry?.running && (
-          <div className="space-y-3">
-            <div className="bg-white/[0.02] rounded-lg p-3">
-              <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Registry URL</p>
-              <p className="text-sm text-white/80 font-mono">{status.registry.url}</p>
-            </div>
-            <div className="flex items-center justify-between border-t border-white/5 pt-4">
-              <p className="text-[11px] text-white/30">
-                Registry is running. Built images will be automatically pushed here during deployments.
-              </p>
-              <button
-                onClick={() => handleUpdate('registry')}
-                disabled={!!updatingComponent}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors disabled:opacity-50 ${
-                  updates?.registry?.updateAvailable
-                    ? 'bg-brand-500/10 border-brand-500/20 text-brand-400 hover:bg-brand-500/20'
-                    : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'
-                }`}
-              >
-                {updatingComponent === 'registry' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : updates?.registry?.updateAvailable ? <ArrowUpCircle className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                {updatingComponent === 'registry'
-                  ? 'Updating...'
-                  : updates?.registry?.updateAvailable
-                    ? `Update → ${updates.registry.latestVersion}`
-                    : 'Re-pull Image'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {deployRegistry.isSuccess && (
-          <div className="mt-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 text-xs text-emerald-400">
-            ✓ {deployRegistry.data?.message}
-          </div>
-        )}
-
-        {deployRegistry.isError && (
-          <div className="mt-3 bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-xs text-red-400">
-            ✗ {deployRegistry.error?.message}
-          </div>
-        )}
-      </div>
+      <RegistryCard
+        status={status}
+        updates={updates}
+        updatingComponent={updatingComponent}
+        handleUpdate={handleUpdate}
+        infraStatus={infraStatus}
+      />
 
       {/* Tailscale VPN Setup */}
       <div className="glass-card p-6">
@@ -953,6 +864,278 @@ function StatusCard({ label, value, detail, active, updateBadge }: {
       </div>
       <p className={`text-sm font-medium ${active ? 'text-white/80' : 'text-white/30'}`}>{value}</p>
       {detail && <p className="text-[11px] text-white/30 mt-0.5 font-mono">{detail}</p>}
+    </div>
+  );
+}
+
+// ── Registry Card with S3 HA support ───────────────────────────────
+function RegistryCard({ status, updates, updatingComponent, handleUpdate, infraStatus }: {
+  status: any;
+  updates: Record<string, any> | null;
+  updatingComponent: string | null;
+  handleUpdate: (component: 'traefik' | 'registry' | 'nixpacks' | 'tailscale', confirmMsg?: string) => void;
+  infraStatus: any;
+}) {
+  const deployRegistry = trpc.infra.deployRegistry.useMutation();
+  const configureS3 = trpc.infra.configureRegistryS3.useMutation();
+  const [showS3Config, setShowS3Config] = useState(false);
+  const [s3Config, setS3Config] = useState({
+    endpoint: '',
+    accessKey: '',
+    secretKey: '',
+    bucket: 'docker-registry',
+    region: 'us-east-1',
+  });
+
+  const registryStatus = status?.registry;
+  const isS3 = registryStatus?.storageMode === 's3';
+  const replicas = registryStatus?.replicas || 0;
+
+  const handleMigrateToS3 = async () => {
+    if (!s3Config.endpoint || !s3Config.accessKey || !s3Config.secretKey) {
+      alert('Please fill in all S3 credentials.');
+      return;
+    }
+    if (!window.confirm(
+      'This will restart the registry service with S3 storage. Existing locally-stored images will NOT be migrated. Continue?'
+    )) return;
+
+    configureS3.mutate(s3Config, {
+      onSuccess: () => {
+        infraStatus.refetch();
+        setShowS3Config(false);
+      },
+    });
+  };
+
+  return (
+    <div className="glass-card p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
+            <Container className="w-4 h-4 text-purple-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">Self-Hosted Docker Registry</h3>
+            <p className="text-[11px] text-white/30">Stores built images on your infrastructure — no Docker Hub needed</p>
+          </div>
+        </div>
+        {registryStatus?.running && (
+          <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+            <CheckCircle className="w-3.5 h-3.5" />
+            Running
+          </span>
+        )}
+      </div>
+
+      {!registryStatus?.running && (
+        <div className="space-y-4">
+          <div className="bg-purple-500/5 border border-purple-500/10 rounded-lg p-4">
+            <div className="flex gap-3">
+              <Container className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-white/40">
+                Deploys a Docker Registry v2 on port <code className="text-purple-400">5000</code> of your manager node.
+                Built images are pushed here before deployment — your data stays on your infrastructure.
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => deployRegistry.mutate({}, {
+              onSuccess: () => infraStatus.refetch(),
+            })}
+            disabled={deployRegistry.isPending || !status?.managerNode}
+            className="btn-primary flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {deployRegistry.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Rocket className="w-4 h-4" />
+            )}
+            {deployRegistry.isPending ? 'Deploying...' : 'Deploy Registry'}
+          </button>
+
+          {!status?.managerNode && (
+            <p className="text-[11px] text-amber-400/70">
+              ⚠ Add a manager node first before deploying the registry
+            </p>
+          )}
+        </div>
+      )}
+
+      {registryStatus?.running && (
+        <div className="space-y-3">
+          {/* Status info */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-white/[0.02] rounded-lg p-3">
+              <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Registry URL</p>
+              <p className="text-sm text-white/80 font-mono">{registryStatus.url}</p>
+            </div>
+            <div className="bg-white/[0.02] rounded-lg p-3">
+              <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Storage</p>
+              <p className={`text-sm font-medium ${isS3 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {isS3 ? '☁ S3 (HA)' : '💾 Local Volume'}
+              </p>
+            </div>
+            <div className="bg-white/[0.02] rounded-lg p-3">
+              <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Replicas</p>
+              <p className={`text-sm font-medium ${replicas >= 2 ? 'text-emerald-400' : 'text-white/80'}`}>
+                {replicas} {replicas >= 2 ? '(HA)' : '(Single)'}
+              </p>
+            </div>
+          </div>
+
+          {/* SPOF warning for local mode */}
+          {!isS3 && (
+            <div className="bg-amber-500/5 border border-amber-500/10 rounded-lg p-3">
+              <div className="flex gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-[11px] text-amber-400/80">
+                    Registry is using local storage — single point of failure. Enable S3 storage for High Availability.
+                  </p>
+                  <button
+                    onClick={() => setShowS3Config(!showS3Config)}
+                    className="text-[11px] text-brand-400 hover:text-brand-300 font-medium mt-1 transition-colors"
+                  >
+                    {showS3Config ? 'Hide S3 config ↑' : 'Enable HA Storage (S3) →'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* S3 Configuration Form */}
+          {showS3Config && !isS3 && (
+            <div className="border border-purple-500/10 rounded-lg p-4 space-y-3 bg-purple-500/[0.02]">
+              <h4 className="text-xs font-semibold text-white/70">S3-Compatible Storage (Supabase / R2 / AWS)</h4>
+              <p className="text-[10px] text-white/30">
+                Connect an S3-compatible bucket to store registry data. The registry will be redeployed with multiple replicas across your nodes.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-medium text-white/50 mb-1">S3 Endpoint</label>
+                  <input
+                    type="text"
+                    value={s3Config.endpoint}
+                    onChange={(e) => setS3Config(p => ({ ...p, endpoint: e.target.value }))}
+                    placeholder="https://xxx.supabase.co/storage/v1/s3"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-medium text-white/50 mb-1">Access Key</label>
+                  <input
+                    type="text"
+                    value={s3Config.accessKey}
+                    onChange={(e) => setS3Config(p => ({ ...p, accessKey: e.target.value }))}
+                    placeholder="Access Key ID"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-medium text-white/50 mb-1">Secret Key</label>
+                  <input
+                    type="password"
+                    value={s3Config.secretKey}
+                    onChange={(e) => setS3Config(p => ({ ...p, secretKey: e.target.value }))}
+                    placeholder="Secret Access Key"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-medium text-white/50 mb-1">Bucket Name</label>
+                  <input
+                    type="text"
+                    value={s3Config.bucket}
+                    onChange={(e) => setS3Config(p => ({ ...p, bucket: e.target.value }))}
+                    placeholder="docker-registry"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-medium text-white/50 mb-1">Region</label>
+                  <input
+                    type="text"
+                    value={s3Config.region}
+                    onChange={(e) => setS3Config(p => ({ ...p, region: e.target.value }))}
+                    placeholder="us-east-1"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all"
+                  />
+                </div>
+              </div>
+              <button
+                onClick={handleMigrateToS3}
+                disabled={configureS3.isPending || !s3Config.endpoint || !s3Config.accessKey || !s3Config.secretKey}
+                className="btn-primary flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed w-full justify-center"
+              >
+                {configureS3.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Server className="w-4 h-4" />
+                )}
+                {configureS3.isPending ? 'Migrating...' : 'Migrate to S3 (HA Mode)'}
+              </button>
+              {configureS3.isError && (
+                <p className="text-xs text-red-400">✗ {configureS3.error?.message}</p>
+              )}
+            </div>
+          )}
+
+          {/* HA success indicator */}
+          {isS3 && (
+            <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-3">
+              <div className="flex gap-2">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-emerald-400/80">
+                  Registry is running in HA mode with S3 storage. {replicas} replicas across your cluster — no single point of failure.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Update button */}
+          <div className="flex items-center justify-between border-t border-white/5 pt-4">
+            <p className="text-[11px] text-white/30">
+              Registry is running. Built images will be automatically pushed here.
+            </p>
+            <button
+              onClick={() => handleUpdate('registry')}
+              disabled={!!updatingComponent}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors disabled:opacity-50 ${
+                updates?.registry?.updateAvailable
+                  ? 'bg-brand-500/10 border-brand-500/20 text-brand-400 hover:bg-brand-500/20'
+                  : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'
+              }`}
+            >
+              {updatingComponent === 'registry' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : updates?.registry?.updateAvailable ? <ArrowUpCircle className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {updatingComponent === 'registry'
+                ? 'Updating...'
+                : updates?.registry?.updateAvailable
+                  ? `Update → ${updates.registry.latestVersion}`
+                  : 'Re-pull Image'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {deployRegistry.isSuccess && (
+        <div className="mt-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 text-xs text-emerald-400">
+          ✓ {deployRegistry.data?.message}
+        </div>
+      )}
+
+      {deployRegistry.isError && (
+        <div className="mt-3 bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-xs text-red-400">
+          ✗ {deployRegistry.error?.message}
+        </div>
+      )}
+
+      {configureS3.isSuccess && (
+        <div className="mt-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 text-xs text-emerald-400">
+          ✓ {configureS3.data?.message}
+        </div>
+      )}
     </div>
   );
 }
