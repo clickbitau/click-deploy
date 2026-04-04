@@ -505,6 +505,50 @@ export const nodeRouter = createRouter({
             console.error('[node] Auto-deploy infrastructure failed:', e);
           }
         }
+
+        // Auto-configure insecure-registry on ALL node types so they can push/pull from the org's self-hosted registry
+        try {
+          const orgRegistry = await ctx.db.query.registries.findFirst({
+            where: and(
+              eq(registries.organizationId, ctx.session.organizationId),
+              eq(registries.isDefault, true),
+            ),
+          });
+
+          if (orgRegistry?.url) {
+            const nodeSshConfig = {
+              host: node.host,
+              port: node.port,
+              username: node.sshUser,
+              privateKey: decryptPrivateKey(node.sshKey.privateKey),
+            };
+
+            console.log(`[node] Configuring insecure-registry ${orgRegistry.url} on ${node.name}...`);
+            const configScript = [
+              `REGISTRY_URL='${orgRegistry.url}'`,
+              `DAEMON_JSON='/etc/docker/daemon.json'`,
+              `if [ -f "$DAEMON_JSON" ]; then`,
+              `  if grep -q "$REGISTRY_URL" "$DAEMON_JSON"; then`,
+              `    echo "already-configured"`,
+              `  else`,
+              `    cp "$DAEMON_JSON" "$DAEMON_JSON.bak"`,
+              `    python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d.setdefault('insecure-registries',[]).append(sys.argv[2]); json.dump(d,open(sys.argv[1],'w'),indent=2)" "$DAEMON_JSON" "$REGISTRY_URL" && systemctl restart docker && echo "configured-and-restarted"`,
+              `  fi`,
+              `else`,
+              `  echo '{"insecure-registries":["'$REGISTRY_URL'"]}' > "$DAEMON_JSON" && systemctl restart docker && echo "created-and-restarted"`,
+              `fi`,
+            ].join('\n');
+
+            const configResult = await sshManager.exec(nodeSshConfig, configScript);
+            if (configResult.stdout.includes('restarted')) {
+              console.log(`[node] Docker restarted on ${node.name} with insecure-registry ${orgRegistry.url}`);
+            } else {
+              console.log(`[node] Registry ${orgRegistry.url} already configured on ${node.name}`);
+            }
+          }
+        } catch (e) {
+          console.error(`[node] Failed to configure insecure-registry on ${node.name}:`, e);
+        }
       }
 
       return result;
