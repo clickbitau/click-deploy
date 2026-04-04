@@ -248,44 +248,67 @@ export class DeploymentEngine {
         const imageTag = commitSha?.slice(0, 7) || Date.now().toString();
         const fullImage = `${imageName}:${imageTag}`;
 
+        // Check if this exact image tag has already been built and pushed to the registry
+        let imageExists = false;
         try {
-          const pruneConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
-          await sshManager.exec(pruneConfig, 'docker builder prune -f --keep-storage 5G 2>/dev/null || true');
-        } catch { /* non-fatal */ }
+          const authConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
+          // Attempt to pull the manifest to prove it exists remotely 
+          // (or locally if registry is localhost)
+          const checkCmd = `docker manifest inspect ${fullImage} >/dev/null 2>&1`;
+          const check = await sshManager.exec(authConfig, checkCmd);
+          imageExists = check.code === 0;
+        } catch { /* ignore */ }
 
-        // Pull latest image for --cache-from (reuse unchanged layers)
-        const cacheFromImage = `${imageName}:latest`;
-        try {
-          const pullConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
-          await sshManager.exec(pullConfig, `docker pull ${cacheFromImage} 2>/dev/null || true`);
-          this.log(deploymentId, 'build', `Pulled cache source: ${cacheFromImage}`);
-        } catch { /* non-fatal — first build won't have a cache source */ }
-
-        this.log(deploymentId, 'build', `Building image: ${fullImage}`);
-        const signal = this.activeDeployments.get(deploymentId)?.signal;
-        await this.dockerBuild(deploymentId, ctx.buildNode, buildDir, fullImage, ctx.service, signal, cacheFromImage);
-        this.checkCancelled(deploymentId);
-
-        await updateDeployment(deploymentId, {
-          buildStatus: 'built',
-          imageName: fullImage,
-          buildDurationMs: Date.now() - buildStartTime,
-          buildLogs: this.logsToText(deploymentId),
-        });
-
-        // 2c. Push to registry
-        if (ctx.registry) {
-          this.log(deploymentId, 'push', `Pushing to ${ctx.registry.url}`);
-          await this.dockerPush(deploymentId, ctx.buildNode, fullImage, ctx.registry);
-
-          // Tag as :latest so next build can use --cache-from
+        if (imageExists) {
+          this.log(deploymentId, 'build', `Image ${fullImage} already exists in registry (commit ${imageTag}). Skipping build phase.`);
+          await updateDeployment(deploymentId, {
+            buildStatus: 'built',
+            imageName: fullImage,
+            buildDurationMs: Date.now() - buildStartTime,
+            buildLogs: this.logsToText(deploymentId) + '\n[build] Skipped build phase since image tag already exists.',
+          });
+        } else {
           try {
-            const tagConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
-            const latestImage = `${imageName}:latest`;
-            await sshManager.exec(tagConfig, `docker tag ${fullImage} ${latestImage}`);
-            await sshManager.exec(tagConfig, `docker push ${latestImage} 2>/dev/null || true`);
-          } catch { /* non-fatal — cache tag is best-effort */ }
+            const pruneConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
+            await sshManager.exec(pruneConfig, 'docker builder prune -f --keep-storage 5G 2>/dev/null || true');
+          } catch { /* non-fatal */ }
+
+          // Pull latest image for --cache-from (reuse unchanged layers)
+          const cacheFromImage = `${imageName}:latest`;
+          try {
+            const pullConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
+            await sshManager.exec(pullConfig, `docker pull ${cacheFromImage} 2>/dev/null || true`);
+            this.log(deploymentId, 'build', `Pulled cache source: ${cacheFromImage}`);
+          } catch { /* non-fatal — first build won't have a cache source */ }
+
+          this.log(deploymentId, 'build', `Building image: ${fullImage}`);
+          const signal = this.activeDeployments.get(deploymentId)?.signal;
+          await this.dockerBuild(deploymentId, ctx.buildNode, buildDir, fullImage, ctx.service, signal, cacheFromImage);
+          this.checkCancelled(deploymentId);
+
+          await updateDeployment(deploymentId, {
+            buildStatus: 'built',
+            imageName: fullImage,
+            buildDurationMs: Date.now() - buildStartTime,
+            buildLogs: this.logsToText(deploymentId),
+          });
+
+          // 2c. Push to registry
+          if (ctx.registry) {
+            this.log(deploymentId, 'push', `Pushing to ${ctx.registry.url}`);
+            await this.dockerPush(deploymentId, ctx.buildNode, fullImage, ctx.registry);
+
+            // Tag as :latest so next build can use --cache-from
+            try {
+              const tagConfig = { host: ctx.buildNode.host, port: ctx.buildNode.port, username: ctx.buildNode.sshUser, privateKey: ctx.buildNode.privateKey };
+              const latestImage = `${imageName}:latest`;
+              await sshManager.exec(tagConfig, `docker tag ${fullImage} ${latestImage}`);
+              await sshManager.exec(tagConfig, `docker push ${latestImage} 2>/dev/null || true`);
+            } catch { /* non-fatal — cache tag is best-effort */ }
+          }
         }
+
+
 
         // 2d. Cleanup build dir
         this.log(deploymentId, 'cleanup', 'Removing build artifacts');
