@@ -25,6 +25,8 @@ import {
   XCircle,
   RefreshCw,
   Container,
+  Edit2,
+  Check,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
@@ -74,6 +76,20 @@ export default function NodeDetailPage() {
   const [showEdit, setShowEdit] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  
+  const [editingName, setEditingName] = useState(false);
+  const [newName, setNewName] = useState('');
+  const updateNode = trpc.node.update.useMutation();
+
+  const handleUpdateName = async () => {
+    if (!newName.trim() || newName.trim() === node?.name) {
+      setEditingName(false);
+      return;
+    }
+    await updateNode.mutateAsync({ id: nodeId, name: newName.trim() });
+    setEditingName(false);
+    refetch();
+  };
 
   const handleDelete = () => {
     if (!confirm('Remove this node from the cluster? This will not affect services already running on it.')) return;
@@ -105,8 +121,16 @@ export default function NodeDetailPage() {
   const StatusIcon = status.icon;
 
   const cpuUsage = resources.cpuUsage ?? 0;
-  const memUsage = resources.memoryUsage ?? 0;
-  const diskUsage = resources.diskUsage ?? 0;
+  
+  const memTotalBytes = resources.memoryTotal ?? 0;
+  const memUsedBytes = resources.memoryUsed ?? 0;
+  const memUsage = memTotalBytes > 0 ? (memUsedBytes / memTotalBytes) * 100 : 0;
+  const memoryGb = memTotalBytes > 0 ? (memTotalBytes / (1024 * 1024 * 1024)).toFixed(1) : undefined;
+  
+  const diskTotalBytes = resources.diskTotal ?? 0;
+  const diskUsedBytes = resources.diskUsed ?? 0;
+  const diskUsage = diskTotalBytes > 0 ? (diskUsedBytes / diskTotalBytes) * 100 : 0;
+  const diskGb = diskTotalBytes > 0 ? (diskTotalBytes / (1024 * 1024 * 1024)).toFixed(1) : undefined;
 
   const tabs = [
     { key: 'overview', label: 'Overview' },
@@ -137,7 +161,29 @@ export default function NodeDetailPage() {
             </div>
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold tracking-tight">{node.name}</h1>
+                {editingName ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      autoFocus
+                      type="text"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleUpdateName()}
+                      className="bg-black/40 border border-brand-500/30 rounded px-2 py-1 text-xl font-bold tracking-tight text-white focus:outline-none focus:border-brand-500 w-48"
+                    />
+                    <button onClick={handleUpdateName} disabled={updateNode.isPending} className="p-1 hover:bg-white/10 rounded text-brand-400">
+                      {updateNode.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    </button>
+                    <button onClick={() => setEditingName(false)} className="p-1 hover:bg-white/10 rounded text-white/40">
+                      <XCircle className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 group cursor-pointer" onClick={() => { setNewName(node.name); setEditingName(true); }}>
+                    <h1 className="text-2xl font-bold tracking-tight">{node.name}</h1>
+                    <Edit2 className="w-4 h-4 text-white/0 group-hover:text-white/30 transition-colors" />
+                  </div>
+                )}
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${status.bg} ${status.class}`}>
                   <StatusIcon className="w-3 h-3 inline mr-1" />{status.label}
                 </span>
@@ -202,8 +248,8 @@ export default function NodeDetailPage() {
           <div className="grid grid-cols-3 gap-4">
             {[
               { label: 'CPU', value: cpuUsage, total: resources.cpuCores ? `${resources.cpuCores} cores` : '-', color: 'var(--color-brand-400, #38bdf8)' },
-              { label: 'Memory', value: memUsage, total: resources.memoryGb ? `${resources.memoryGb} GB` : '-', color: 'var(--color-accent-400, #a78bfa)' },
-              { label: 'Disk', value: diskUsage, total: resources.diskGb ? `${resources.diskGb} GB` : '-', color: 'var(--color-success-400, #4ade80)' },
+              { label: 'Memory', value: memUsage, total: memoryGb ? `${memoryGb} GB` : '-', color: 'var(--color-accent-400, #a78bfa)' },
+              { label: 'Disk', value: diskUsage, total: diskGb ? `${diskGb} GB` : '-', color: 'var(--color-success-400, #4ade80)' },
             ].map((metric: { label: string; value: number; total: string; color: string }) => (
               <div key={metric.label} className="glass-card p-5 flex flex-col items-center">
                 <div className="relative mb-3">
@@ -252,7 +298,7 @@ export default function NodeDetailPage() {
                   <div className="flex justify-between">
                     <span className="text-xs text-white/30">Region</span>
                     <span className="text-xs text-white/60 flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />{resources.region}
+                      <MapPin className="w-3 h-3" />{String(resources.region)}
                     </span>
                   </div>
                 )}
@@ -260,20 +306,20 @@ export default function NodeDetailPage() {
                   <div className="flex justify-between">
                     <span className="text-xs text-white/30">Provider</span>
                     <span className="text-xs text-white/60 capitalize flex items-center gap-1">
-                      <Cloud className="w-3 h-3" />{resources.provider}
+                      <Cloud className="w-3 h-3" />{String(resources.provider)}
                     </span>
                   </div>
                 )}
                 {resources.datacenter && (
                   <div className="flex justify-between">
                     <span className="text-xs text-white/30">Datacenter</span>
-                    <span className="text-xs text-white/60">{resources.datacenter}</span>
+                    <span className="text-xs text-white/60">{String(resources.datacenter)}</span>
                   </div>
                 )}
                 {resources.networkType && (
                   <div className="flex justify-between">
                     <span className="text-xs text-white/30">Network</span>
-                    <span className="text-xs text-white/60 capitalize">{resources.networkType}</span>
+                    <span className="text-xs text-white/60 capitalize">{String(resources.networkType)}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
