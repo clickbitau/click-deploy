@@ -31,6 +31,7 @@ import {
   Copy,
   Clock,
   Plus,
+  AlertTriangle,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 
@@ -1470,6 +1471,7 @@ function UpdatesTab() {
   const checkUpdate = trpc.system.checkUpdate.useQuery(undefined, { enabled: false, retry: 1 });
   const triggerUpdate = trpc.system.triggerUpdate.useMutation();
   const [updateTriggered, setUpdateTriggered] = useState(false);
+  const [confirmingUpdate, setConfirmingUpdate] = useState(false);
   const terminalRef = useRef<HTMLPreElement>(null);
 
   // Poll update logs while update is in progress
@@ -1501,7 +1503,7 @@ function UpdatesTab() {
   };
 
   const handleUpdate = () => {
-    if (!confirm('This will pull the latest code and rebuild the platform. The dashboard may be temporarily unavailable. Continue?')) return;
+    setConfirmingUpdate(false);
     triggerUpdate.mutate(undefined, {
       onSuccess: () => setUpdateTriggered(true),
     });
@@ -1592,10 +1594,10 @@ function UpdatesTab() {
                 ))}
               </div>
 
-              {/* Update button */}
-              {!updateTriggered && (
+              {/* Update button / confirmation */}
+              {!updateTriggered && !confirmingUpdate && (
                 <button
-                  onClick={handleUpdate}
+                  onClick={() => setConfirmingUpdate(true)}
                   disabled={triggerUpdate.isPending}
                   className="w-full py-3 rounded-lg bg-gradient-to-r from-brand-500 to-accent-500 text-white font-semibold text-sm flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
@@ -1606,6 +1608,40 @@ function UpdatesTab() {
                   )}
                   {triggerUpdate.isPending ? 'Starting update...' : 'Update Now'}
                 </button>
+              )}
+
+              {!updateTriggered && confirmingUpdate && (
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4 space-y-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-medium text-amber-400">Confirm Platform Update</p>
+                      <p className="text-[11px] text-amber-400/60 mt-1">
+                        This will pull the latest code and rebuild the platform. The dashboard may be temporarily unavailable during the update.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleUpdate}
+                      disabled={triggerUpdate.isPending}
+                      className="flex-1 py-2 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 font-medium text-xs hover:bg-amber-500/30 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    >
+                      {triggerUpdate.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Download className="w-3.5 h-3.5" />
+                      )}
+                      {triggerUpdate.isPending ? 'Starting...' : 'Yes, Update Now'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmingUpdate(false)}
+                      className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white/50 font-medium text-xs hover:bg-white/10 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
               )}
 
               {triggerUpdate.isError && (
