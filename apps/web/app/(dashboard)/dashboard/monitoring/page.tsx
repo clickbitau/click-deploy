@@ -242,6 +242,22 @@ export default function MonitoringPage() {
                         </div>
                       </div>
                     )}
+                    {node.swarmStatus === 'inactive' && node.status === 'online' && node.role !== 'build' && (
+                      <div className="ml-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-danger-500/20 bg-danger-500/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_1px_4px_rgba(0,0,0,0.2)]">
+                        <span className="text-danger-500 text-[10px] uppercase font-bold tracking-wider">Swarm Detached</span>
+                        <div className="group relative flex items-center">
+                          <AlertTriangle className="w-3 h-3 text-danger-400 cursor-help" />
+                          <div className="absolute right-0 bottom-full mb-2 hidden group-hover:block w-72 p-3 bg-gray-900 border border-danger-500/20 rounded-lg shadow-xl z-50 pointer-events-none">
+                            <p className="text-[10px] text-white/70 font-medium mb-2 normal-case leading-relaxed">
+                              Critical deployment risk! This node is physically online, but isolated from the Docker mesh! Deployments scaled to this node will infinitely freeze.
+                            </p>
+                            <p className="text-[10px] font-bold text-danger-400 normal-case">
+                              Go to Settings → Join Node and run the token command over SSH.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="grid grid-cols-3 gap-6">
                     <div>
