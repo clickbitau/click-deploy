@@ -864,41 +864,80 @@ export class DeploymentEngine {
     const serviceExists = inspectResult.code === 0 && inspectResult.stdout.trim().length > 0;
 
     // ── Multi-node placement ─────────────────────────────
-    // Label selected deploy nodes so Swarm places replicas on them
+    // Label selected deploy nodes so Swarm places replicas on them.
+    // Only add placement constraints if at least one node was successfully labeled.
     const deployNodeIds = ctx.service.deployNodeIds || [];
     const placementLabel = `click-deploy.svc-${ctx.service.id}`;
     const constraints: string[] = [];
+    let labeledCount = 0;
 
     if (deployNodeIds.length > 0) {
       this.log('deploy', `Targeting ${deployNodeIds.length} node(s) for deployment`);
 
-      // Get Swarm node IDs for each selected node
+      // Pre-fetch all Swarm node info once (ID, hostname, addr)
+      const swarmNodesResult = await sshManager.exec(
+        sshConfig,
+        `docker node ls --format '{{.ID}} {{.Hostname}} {{.Status}}' 2>/dev/null`
+      );
+      const swarmNodes = swarmNodesResult.stdout.split('\n')
+        .filter((l: string) => l.trim())
+        .map((l: string) => {
+          const parts = l.trim().split(/\s+/);
+          // ID may have a trailing * for the current leader
+          return { id: (parts[0] || '').replace('*', ''), hostname: parts[1] || '', status: parts[2] || '' };
+        });
+
       for (const nodeId of deployNodeIds) {
         const nodeRecord = await db.query.nodes.findFirst({
           where: eq(nodes.id, nodeId),
         });
-        if (nodeRecord?.swarmNodeId) {
-          // Label this Swarm node for placement
-          await sshManager.exec(
-            sshConfig,
-            `docker node update --label-add ${placementLabel}=true ${nodeRecord.swarmNodeId}`
+        if (!nodeRecord) {
+          this.log('deploy', `Deploy node ${nodeId} not found in database, skipping`, 'error');
+          continue;
+        }
+
+        let swarmId = nodeRecord.swarmNodeId;
+
+        // If we don't have a cached swarmNodeId, resolve it now
+        if (!swarmId) {
+          // Match by hostname or by host IP — Swarm node hostnames can be anything
+          const match = swarmNodes.find(
+            (sn: { id: string; hostname: string; status: string }) =>
+              sn.hostname === nodeRecord.host ||
+              sn.hostname === nodeRecord.name ||
+              sn.hostname.toLowerCase() === nodeRecord.name.toLowerCase()
           );
-        } else if (nodeRecord) {
-          // Try to find Swarm node by hostname
-          const findNode = await sshManager.exec(
-            sshConfig,
-            `docker node ls --format '{{.ID}}' --filter name=${nodeRecord.host} 2>/dev/null || docker node ls --format '{{.ID}}' 2>/dev/null | head -1`
-          );
-          const swarmId = findNode.stdout.trim().split('\n')[0];
-          if (swarmId) {
-            await sshManager.exec(sshConfig, `docker node update --label-add ${placementLabel}=true ${swarmId}`);
-            // Save swarm node ID for future use
+
+          if (match) {
+            swarmId = match.id;
+            // Cache for future deployments
             await db.update(nodes).set({ swarmNodeId: swarmId }).where(eq(nodes.id, nodeId));
+            this.log('deploy', `Resolved Swarm node for "${nodeRecord.name}": ${swarmId}`);
+          } else {
+            this.log('deploy', `Could not resolve Swarm node for "${nodeRecord.name}" (host: ${nodeRecord.host}). Skipping placement label.`, 'error');
+            continue;
           }
+        }
+
+        // Apply the placement label
+        const labelResult = await sshManager.exec(
+          sshConfig,
+          `docker node update --label-add ${placementLabel}=true ${swarmId}`
+        );
+        if (labelResult.code === 0) {
+          labeledCount++;
+        } else {
+          this.log('deploy', `Failed to label Swarm node ${swarmId}: ${labelResult.stderr}`, 'error');
         }
       }
 
-      constraints.push(`node.labels.${placementLabel}==true`);
+      // Only add the constraint if we actually labeled at least one node
+      if (labeledCount > 0) {
+        constraints.push(`node.labels.${placementLabel}==true`);
+        this.log('deploy', `Placement constraint active: ${labeledCount}/${deployNodeIds.length} node(s) labeled`);
+      } else {
+        this.log('deploy', `No nodes could be labeled — deploying without placement constraints (Swarm will schedule freely)`, 'error');
+      }
     }
 
     if (serviceExists) {

@@ -28,7 +28,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
     working_dir: /app/packages/database
-    command: ["sh", "-c", "npx drizzle-kit push --force && sh /app/scripts/post-migrate.sh"]
+    command: ["sh", "-c", "npx drizzle-kit push --force && ([ -f /app/scripts/post-migrate.sh ] && sh /app/scripts/post-migrate.sh || true)"]
     restart: "no"
 
   # ── Click-Deploy Web App ───────────────────────────────────
