@@ -16,6 +16,10 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 // Track consecutive failures per node
 const failureCount = new Map<string, number>();
 
+// Counter for offline re-probe cycles (every 5th cycle = ~5 minutes)
+let heartbeatCycleCount = 0;
+const OFFLINE_REPROBE_INTERVAL = 5; // re-check offline nodes every N cycles
+
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -50,15 +54,26 @@ export function stopHeartbeatMonitor() {
  */
 async function runHeartbeat() {
   try {
-    // Get all nodes that should be monitored (not manually set offline)
-    const allNodes = await db.query.nodes.findMany({
-      where: ne(nodes.status, 'offline'),
-      with: {
-        sshKey: true,
-      },
-    });
+    heartbeatCycleCount++;
+    const shouldReprobeOffline = heartbeatCycleCount % OFFLINE_REPROBE_INTERVAL === 0;
+
+    // Get all nodes that should be monitored
+    // Normally skip offline nodes, but periodically re-probe them
+    const allNodes = shouldReprobeOffline
+      ? await db.query.nodes.findMany({ with: { sshKey: true } })
+      : await db.query.nodes.findMany({
+          where: ne(nodes.status, 'offline'),
+          with: { sshKey: true },
+        });
 
     if (allNodes.length === 0) return;
+
+    if (shouldReprobeOffline) {
+      const offlineCount = allNodes.filter(n => n.status === 'offline').length;
+      if (offlineCount > 0) {
+        console.log(`[heartbeat] Re-probing ${offlineCount} offline node(s) (cycle ${heartbeatCycleCount})`);
+      }
+    }
 
     // Set up Tailscale tunnel config: find the manager node so
     // heartbeats to Tailscale IPs (100.x.x.x) route through it

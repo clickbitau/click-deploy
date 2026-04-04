@@ -5,6 +5,12 @@ import { z } from 'zod';
 import { eq, and, desc } from 'drizzle-orm';
 import { services, projects, nodes } from '@click-deploy/database';
 import { createRouter, protectedProcedure } from '../trpc';
+import { sanitizeDockerName, sanitizeEnvPair } from '../shell';
+
+/** Consistent service naming — MUST match engine.ts getSwarmServiceName */
+function getSwarmServiceName(serviceName: string): string {
+  return sanitizeDockerName(`cd-${serviceName}`);
+}
 
 const serviceInput = z.object({
   name: z.string().min(1).max(100),
@@ -260,10 +266,7 @@ export const serviceRouter = createRouter({
               privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
             };
 
-            const serviceName = `${existing.project.name}-${existing.name}`
-              .toLowerCase()
-              .replace(/[^a-z0-9-]/g, '-')
-              .replace(/-+/g, '-');
+            const serviceName = getSwarmServiceName(existing.name);
 
             // Remove the Docker Swarm service
             await sshManager.exec(sshConfig, `docker service rm ${serviceName} 2>/dev/null || true`);
@@ -324,16 +327,15 @@ export const serviceRouter = createRouter({
 
       // Build env args from current service config (sanitize to prevent injection)
       const envVars = (service.envVars as Record<string, string>) || {};
-      const sanitize = (s: string) => s.replace(/['"\\$`!;|&(){}]/g, '');
       const envArgs = Object.entries(envVars)
-        .map(([k, v]) => `--env-add "${sanitize(k)}=${sanitize(v)}"`)
+        .map(([k, v]) => {
+          const safe = sanitizeEnvPair(k, v);
+          return `--env-add "${safe.key}=${safe.value}"`;
+        })
         .join(' ');
 
       // Determine swarm service name
-      const serviceName = `${service.project.name}-${service.name}`
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, '-')
-        .replace(/-+/g, '-');
+      const serviceName = getSwarmServiceName(service.name);
 
       const cmd = `docker service update --force ${envArgs} ${serviceName}`;
       const result = await sshManager.exec(sshConfig, cmd);
@@ -369,7 +371,7 @@ export const serviceRouter = createRouter({
       if (!managerNode?.sshKey) throw new Error('No online manager node');
 
       const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
-      const serviceName = `${service.project.name}-${service.name}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+      const serviceName = getSwarmServiceName(service.name);
 
       const result = await sshManager.exec(sshConfig, `docker service scale ${serviceName}=0`);
       if (result.code !== 0) throw new Error(`Stop failed: ${result.stderr}`);
@@ -402,7 +404,7 @@ export const serviceRouter = createRouter({
       if (!managerNode?.sshKey) throw new Error('No online manager node');
 
       const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
-      const serviceName = `${service.project.name}-${service.name}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+      const serviceName = getSwarmServiceName(service.name);
       const replicas = service.replicas || 1;
 
       const result = await sshManager.exec(sshConfig, `docker service scale ${serviceName}=${replicas}`);
@@ -488,9 +490,10 @@ export const serviceRouter = createRouter({
       if (!managerNode?.sshKey) throw new Error('No online manager node');
 
       const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
-      const serviceName = `${service.project.name}-${service.name}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+      const serviceName = getSwarmServiceName(service.name);
+      const tail = Math.max(10, Math.min(500, input.tail)); // clamp to safe range
 
-      const result = await sshManager.exec(sshConfig, `docker service logs --tail ${input.tail} --no-trunc ${serviceName} 2>&1`);
+      const result = await sshManager.exec(sshConfig, `docker service logs --tail ${tail} --no-trunc ${serviceName} 2>&1`);
       return { logs: result.stdout || result.stderr || 'No output' };
     }),
 });

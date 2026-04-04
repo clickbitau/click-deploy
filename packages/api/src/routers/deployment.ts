@@ -2,7 +2,7 @@
 // Click-Deploy — Deployment Router
 // ============================================================
 import { z } from 'zod';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, inArray, sql } from 'drizzle-orm';
 import { deployments, services, projects, nodes, inAppNotifications } from '@click-deploy/database';
 import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
 import { deploymentEngine } from '../engine';
@@ -62,14 +62,21 @@ export const deploymentRouter = createRouter({
 
       if (projectIds.length === 0) return { items: [], total: 0 };
 
-      // Note: we fetch globally and filter by org via the service→project join below.
-      // This approach works well up to ~200 total deployments across all orgs.
-      // For larger scale, use SQL-level filtering with inArray on serviceIds.
+      // Get all service IDs belonging to this org's projects
+      const orgServices = await ctx.db.query.services.findMany({
+        where: inArray(services.projectId, projectIds),
+        columns: { id: true },
+      });
 
-      // Fetch more than needed to filter by org, then paginate
+      const serviceIds = orgServices.map((s) => s.id);
+      if (serviceIds.length === 0) return { items: [], total: 0 };
+
+      // SQL-level filtered query — only fetches this org's deployments
       const recent = await ctx.db.query.deployments.findMany({
+        where: inArray(deployments.serviceId, serviceIds),
         orderBy: [desc(deployments.createdAt)],
-        limit: 200, // fetch enough to count total for this org
+        limit: limit,
+        offset: offset,
         with: {
           service: {
             columns: { id: true, name: true, projectId: true },
@@ -84,14 +91,15 @@ export const deploymentRouter = createRouter({
         },
       });
 
-      // Filter to only this org's deployments
-      const orgDeployments = recent.filter(
-        (d) => d.service.project.organizationId === ctx.session.organizationId
-      );
+      // For total count, use a count query on the same filter
+      const [countResult] = await ctx.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(deployments)
+        .where(inArray(deployments.serviceId, serviceIds));
 
       return {
-        items: orgDeployments.slice(offset, offset + limit),
-        total: orgDeployments.length,
+        items: recent,
+        total: countResult?.count ?? recent.length,
       };
     }),
 

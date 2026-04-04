@@ -65,7 +65,10 @@ export const domainRouter = createRouter({
   create: adminProcedure
     .input(z.object({
       serviceId: z.string().uuid(),
-      hostname: z.string().min(1).max(255),
+      hostname: z.string().min(1).max(255)
+        .regex(/^(\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/, {
+          message: 'Must be a valid hostname (e.g. app.example.com or *.example.com)',
+        }),
       sslEnabled: z.boolean().default(true),
       sslProvider: z.enum(['letsencrypt', 'cloudflare', 'custom', 'none']).default('letsencrypt'),
       tunnelId: z.string().uuid().optional(),

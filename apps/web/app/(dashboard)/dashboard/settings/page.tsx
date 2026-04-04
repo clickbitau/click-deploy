@@ -927,7 +927,10 @@ function StorageTab() {
     selectedNodeId ? { nodeId: selectedNodeId } : undefined
   );
   const prune = trpc.infra.dockerPrune.useMutation({
-    onSuccess: () => { refetch(); },
+    onSuccess: () => {
+      // Refetch storage data for the SAME node we just pruned
+      refetch();
+    },
   });
 
   const [pruneOptions, setPruneOptions] = useState({
