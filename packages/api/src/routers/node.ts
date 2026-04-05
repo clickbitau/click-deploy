@@ -563,6 +563,53 @@ export const nodeRouter = createRouter({
             } else {
               console.log(`[node] Registry ${orgRegistry.url} already configured on ${node.name}`);
             }
+
+            // ── Post-config verification ──
+            // Confirm the node can actually reach the registry via Docker
+            const verifyScript = [
+              `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://${orgRegistry.url}/v2/" 2>/dev/null || echo "000")`,
+              `if [ "$HTTP_CODE" != "200" ]; then`,
+              `  echo "VERIFY_FAIL_HTTP_$HTTP_CODE"`,
+              `  exit 0`,
+              `fi`,
+              `PULL_TEST=$(docker pull ${orgRegistry.url}/click-deploy-verify:nonexistent 2>&1 || true)`,
+              `if echo "$PULL_TEST" | grep -qi "not found\\|manifest.*unknown"; then`,
+              `  echo "VERIFY_PASS"`,
+              `elif echo "$PULL_TEST" | grep -qi "http.*https\\|server gave HTTP"; then`,
+              `  echo "VERIFY_FAIL_HTTPS"`,
+              `else`,
+              `  echo "VERIFY_PASS"`,
+              `fi`,
+            ].join('\n');
+
+            const verifyResult = await sshManager.exec(nodeSshConfig, verifyScript);
+            const verifyOutput = verifyResult.stdout.trim();
+
+            if (verifyOutput === 'VERIFY_PASS') {
+              console.log(`[node] ✅ Registry verification passed on ${node.name}`);
+            } else if (verifyOutput === 'VERIFY_FAIL_HTTPS') {
+              // Auto-remediate: force insecure-registries and restart Docker
+              console.log(`[node] ⚠ HTTPS mismatch on ${node.name} — auto-remediating...`);
+              const fixScript = [
+                `echo '{"insecure-registries":["${orgRegistry.url}"]}' > /etc/docker/daemon.json`,
+                `systemctl restart docker`,
+                `sleep 3`,
+                `RETRY=$(docker pull ${orgRegistry.url}/click-deploy-verify:nonexistent 2>&1 || true)`,
+                `if echo "$RETRY" | grep -qi "not found\\|manifest.*unknown"; then`,
+                `  echo "REMEDIATED"`,
+                `else`,
+                `  echo "REMEDIATION_FAILED"`,
+                `fi`,
+              ].join('\n');
+              const fixResult = await sshManager.exec(nodeSshConfig, fixScript);
+              if (fixResult.stdout.includes('REMEDIATED')) {
+                console.log(`[node] ✅ Auto-remediation succeeded on ${node.name}`);
+              } else {
+                console.error(`[node] ❌ Auto-remediation failed on ${node.name}: ${fixResult.stdout}`);
+              }
+            } else {
+              console.warn(`[node] ⚠ Registry verification inconclusive on ${node.name}: ${verifyOutput}`);
+            }
           }
         } catch (e) {
           console.error(`[node] Failed to configure insecure-registry on ${node.name}:`, e);

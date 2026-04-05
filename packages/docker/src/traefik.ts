@@ -446,6 +446,7 @@ export class RegistryManager {
         `--env REGISTRY_STORAGE_S3_BUCKET=${opts!.s3!.bucket}`,
         `--env REGISTRY_STORAGE_S3_REGION=${opts!.s3!.region || 'us-east-1'}`,
         `--env REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true`,
+        `--env REGISTRY_STORAGE_S3_V4AUTH=true`,
         // HA: shared secret for consistent uploads across replicas
         `--env REGISTRY_HTTP_SECRET=${crypto.randomBytes(32).toString('hex')}`,
         // Disable in-memory cache redirect — S3 handles it
@@ -529,6 +530,7 @@ export class RegistryManager {
       `--env REGISTRY_STORAGE_S3_BUCKET=${s3Config.bucket}`,
       `--env REGISTRY_STORAGE_S3_REGION=${s3Config.region || 'us-east-1'}`,
       `--env REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true`,
+      `--env REGISTRY_STORAGE_S3_V4AUTH=true`,
       `--env REGISTRY_STORAGE_REDIRECT_DISABLE=true`,
       `--env REGISTRY_HTTP_SECRET=${sharedSecret}`,
       `--label traefik.enable=false`,
