@@ -57,6 +57,12 @@ COPY . .
 # Runtime env vars override these via docker-compose
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Supabase client vars must be available at build time (NEXT_PUBLIC_ prefix)
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+
 # Capture commit SHA for version display
 ARG GIT_COMMIT_SHA=unknown
 ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
