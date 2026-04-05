@@ -237,7 +237,11 @@ export default function ProjectDetailPage() {
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-start gap-3">
                       <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-500/20 to-brand-600/10 flex items-center justify-center border border-brand-500/10 mt-0.5">
-                        <Container className="w-5 h-5 text-brand-400" />
+                        {(!service.type || service.type === 'application') ? (
+                          <Container className="w-5 h-5 text-brand-400" />
+                        ) : (
+                          <Database className="w-5 h-5 text-brand-400" />
+                        )}
                       </div>
                       <div>
                         <h3 className="text-sm font-semibold text-white">{service.name}</h3>

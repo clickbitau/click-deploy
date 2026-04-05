@@ -6,6 +6,7 @@ import { eq, and, desc, inArray, sql, or } from 'drizzle-orm';
 import { deployments, services, projects, nodes, inAppNotifications } from '@click-deploy/database';
 import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
 import { deploymentEngine } from '../engine';
+import { audit } from '../audit';
 
 export const deploymentRouter = createRouter({
   /** List deployments for a service */
@@ -227,6 +228,14 @@ export const deploymentRouter = createRouter({
         resourceId: deployment!.id,
       }).catch(() => {}); // best-effort
 
+      audit(ctx.db, ctx, {
+        action: 'deployment.trigger',
+        resourceType: 'deployment',
+        resourceId: deployment!.id,
+        resourceName: `${service.name} deploy`,
+        description: `Triggered deployment for service "${service.name}"`,
+      });
+
       return deployment;
     }),
 
@@ -263,6 +272,14 @@ export const deploymentRouter = createRouter({
         })
         .where(eq(deployments.id, input.id))
         .returning();
+
+      audit(ctx.db, ctx, {
+        action: 'deployment.cancel',
+        resourceType: 'deployment',
+        resourceId: input.id,
+        resourceName: `${deployment.service.name} deploy`,
+        description: `Cancelled deployment for service "${deployment.service.name}"`,
+      });
 
       return updated;
     }),
@@ -307,6 +324,14 @@ export const deploymentRouter = createRouter({
       // Fire-and-forget: run deploy-only (skip build) in background
       deploymentEngine.runDeployOnly(rollbackDeploy!.id).catch((err) => {
         console.error('[deploy] Background rollback failed:', err);
+      });
+
+      audit(ctx.db, ctx, {
+        action: 'deployment.rollback',
+        resourceType: 'deployment',
+        resourceId: rollbackDeploy!.id,
+        resourceName: `${targetDeploy.service.name} deploy`,
+        description: `Rolled back service "${targetDeploy.service.name}" to previous deployment`,
       });
 
       return rollbackDeploy;
