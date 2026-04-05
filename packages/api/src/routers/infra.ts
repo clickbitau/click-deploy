@@ -77,7 +77,7 @@ async function getManagerNode(db: typeof import('@click-deploy/database').db, or
   return {
     id: node.id,
     name: node.name,
-    host: node.host,
+    host: node.tailscaleIp || node.host,
     port: node.port,
     sshUser: node.sshUser,
     privateKey: decryptPrivateKey(node.sshKey.privateKey),
@@ -99,7 +99,7 @@ async function setupTunnelConfig(db: typeof import('@click-deploy/database').db,
 
   if (managerNode?.sshKey && managerNode.host !== targetHost) {
     sshManager.setManagerConfig({
-      host: managerNode.host,
+      host: managerNode.tailscaleIp || managerNode.host,
       port: managerNode.port,
       username: managerNode.sshUser,
       privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),

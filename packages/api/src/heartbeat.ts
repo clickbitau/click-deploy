@@ -80,7 +80,7 @@ async function runHeartbeat() {
     const managerNode = allNodes.find(n => n.role === 'manager' && n.sshKey);
     if (managerNode?.sshKey) {
       sshManager.setManagerConfig({
-        host: managerNode.host,
+        host: managerNode.tailscaleIp || managerNode.host,
         port: managerNode.port,
         username: managerNode.sshUser,
         privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -110,7 +110,7 @@ async function pollNode(node: typeof nodes.$inferSelect, sshKey: typeof sshKeys.
   }
 
   const sshConfig = {
-    host: node.host,
+    host: node.tailscaleIp || node.host, // Prefer Tailscale IP for mesh connectivity
     port: node.port,
     username: node.sshUser,
     privateKey: decryptPrivateKey(sshKey.privateKey),

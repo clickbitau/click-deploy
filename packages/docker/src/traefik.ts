@@ -8,6 +8,7 @@
 // - Let's Encrypt automatic SSL via ACME
 // - Self-hosted Docker registry deployment
 // ============================================================
+import * as crypto from 'crypto';
 import { sshManager } from './ssh';
 import { type NodeConnectionInfo } from './client';
 
@@ -429,7 +430,7 @@ export class RegistryManager {
         `--env REGISTRY_STORAGE_S3_REGION=${opts!.s3!.region || 'us-east-1'}`,
         `--env REGISTRY_STORAGE_S3_FORCEPATHSTYLE=true`,
         // HA: shared secret for consistent uploads across replicas
-        `--env REGISTRY_HTTP_SECRET=${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`,
+        `--env REGISTRY_HTTP_SECRET=${crypto.randomBytes(32).toString('hex')}`,
         // Disable in-memory cache redirect — S3 handles it
         `--env REGISTRY_STORAGE_REDIRECT_DISABLE=true`,
       );
@@ -496,7 +497,7 @@ export class RegistryManager {
     }
 
     // Create fresh service with S3 config
-    const sharedSecret = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+    const sharedSecret = crypto.randomBytes(32).toString('hex');
     const cmd = [
       `docker service create`,
       `--name ${serviceName}`,

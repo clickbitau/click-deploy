@@ -29,7 +29,7 @@ async function getPrimaryManagerNode(ctx: { db: typeof import('@click-deploy/dat
     if (!keyRecord) continue;
 
     const sshConfig = {
-      host: node.host,
+      host: node.tailscaleIp || node.host,
       port: node.port,
       username: node.sshUser,
       privateKey: decryptPrivateKey(keyRecord.privateKey),
@@ -45,27 +45,7 @@ async function getPrimaryManagerNode(ctx: { db: typeof import('@click-deploy/dat
   return null;
 }
 
-// ── SMTP helper ─────────────────────────────────────────────
-async function sendEmail(smtpConfig: { host: string; port: number | string; user: string; password: string; from: string }, to: string, subject: string, html: string) {
-  // Dynamic import to avoid bundling issues
-  const nodemailer = await import('nodemailer');
-  const transport = nodemailer.createTransport({
-    host: smtpConfig.host,
-    port: Number(smtpConfig.port) || 587,
-    secure: Number(smtpConfig.port) === 465,
-    auth: {
-      user: smtpConfig.user,
-      pass: smtpConfig.password,
-    },
-  });
-  await transport.sendMail({
-    from: smtpConfig.from || smtpConfig.user,
-    to,
-    subject,
-    html,
-  });
-}
-
+import { sendEmail } from '../notifications';
 export const systemRouter = createRouter({
   /** Get the current platform version */
   version: protectedProcedure
@@ -102,6 +82,16 @@ export const systemRouter = createRouter({
       return user || null;
     }),
 
+  /** Get current organization details */
+  getOrganization: protectedProcedure
+    .query(async ({ ctx }) => {
+      const org = await ctx.db.query.organizations.findFirst({
+        where: eq(organizations.id, ctx.session.organizationId),
+        columns: { id: true, name: true, slug: true },
+      });
+      return org || null;
+    }),
+
   /** Update the current user's profile (name, email, image) */
   updateProfile: protectedProcedure
     .input(z.object({
@@ -117,6 +107,22 @@ export const systemRouter = createRouter({
       }).where(eq(users.id, ctx.session.userId));
       return { success: true, name: input.name, email: input.email, image: input.image };
     }),
+
+  /** Update organization detail */
+  updateOrganization: adminProcedure
+    .input(z.object({
+      name: z.string().min(1).max(100),
+      slug: z.string().min(1).max(100),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.update(organizations).set({
+        name: input.name,
+        slug: input.slug,
+        updatedAt: new Date(),
+      }).where(eq(organizations.id, ctx.session.organizationId));
+      return { success: true };
+    }),
+
 
   /** Change the current user's password */
   changePassword: protectedProcedure

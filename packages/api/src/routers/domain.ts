@@ -184,7 +184,7 @@ async function updateTraefikForService(
   const traefik = new TraefikManager({
     id: managerNode.id,
     name: managerNode.name,
-    host: managerNode.host,
+    host: managerNode.tailscaleIp || managerNode.host,
     port: managerNode.port,
     sshUser: managerNode.sshUser,
     privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),

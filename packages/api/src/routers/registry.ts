@@ -145,7 +145,7 @@ export const registryRouter = createRouter({
           }
 
           const sshConfig = {
-            host: managerNode.host,
+            host: managerNode.tailscaleIp || managerNode.host,
             port: managerNode.port,
             username: managerNode.sshUser,
             privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -176,7 +176,7 @@ export const registryRouter = createRouter({
           }
 
           const sshConfig = {
-            host: managerNode.host,
+            host: managerNode.tailscaleIp || managerNode.host,
             port: managerNode.port,
             username: managerNode.sshUser,
             privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -204,5 +204,116 @@ export const registryRouter = createRouter({
       }
 
       return { success: true, message: 'No credentials to test — registry assumed reachable' };
+    }),
+
+  /** Get list of available repositories/images in the registry */
+  catalog: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const registry = await ctx.db.query.registries.findFirst({
+        where: and(
+          eq(registries.id, input.id),
+          eq(registries.organizationId, ctx.session.organizationId)
+        ),
+      });
+
+      if (!registry) throw new Error('Registry not found');
+
+      const managerNode = await ctx.db.query.nodes.findFirst({
+        where: and(
+          eq(nodes.organizationId, ctx.session.organizationId),
+          eq(nodes.role, 'manager'),
+          eq(nodes.status, 'online')
+        ),
+        with: { sshKey: true },
+      });
+
+      if (!managerNode?.sshKey) throw new Error('No online manager node available');
+
+      const sshConfig = {
+        host: managerNode.tailscaleIp || managerNode.host,
+        port: managerNode.port,
+        username: managerNode.sshUser,
+        privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+      };
+
+      let authHeaderVal = '';
+      if (registry.username && registry.password) {
+        const username = decryptPrivateKey(registry.username);
+        const password = decryptPrivateKey(registry.password);
+        authHeaderVal = `-u '${username.replace(/'/g, "'\\''")}:${password.replace(/'/g, "'\\''")}'`;
+      }
+
+      const result = await sshManager.exec(
+        sshConfig,
+        `curl -sf -m 10 ${authHeaderVal} ${registry.url}/v2/_catalog 2>/dev/null`
+      );
+
+      if (result.code !== 0) {
+        throw new Error(`Failed to fetch catalog from registry`);
+      }
+
+      try {
+        const data = JSON.parse(result.stdout);
+        return { repositories: data.repositories || [] };
+      } catch (err) {
+        throw new Error('Invalid response from registry');
+      }
+    }),
+
+  /** Get tags for a specific repository */
+  tags: protectedProcedure
+    .input(z.object({ id: z.string().uuid(), repository: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const registry = await ctx.db.query.registries.findFirst({
+        where: and(
+          eq(registries.id, input.id),
+          eq(registries.organizationId, ctx.session.organizationId)
+        ),
+      });
+
+      if (!registry) throw new Error('Registry not found');
+
+      const managerNode = await ctx.db.query.nodes.findFirst({
+        where: and(
+          eq(nodes.organizationId, ctx.session.organizationId),
+          eq(nodes.role, 'manager'),
+          eq(nodes.status, 'online')
+        ),
+        with: { sshKey: true },
+      });
+
+      if (!managerNode?.sshKey) throw new Error('No online manager node available');
+
+      const sshConfig = {
+        host: managerNode.tailscaleIp || managerNode.host,
+        port: managerNode.port,
+        username: managerNode.sshUser,
+        privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+      };
+
+      let authHeaderVal = '';
+      if (registry.username && registry.password) {
+        const username = decryptPrivateKey(registry.username);
+        const password = decryptPrivateKey(registry.password);
+        authHeaderVal = `-u '${username.replace(/'/g, "'\\''")}:${password.replace(/'/g, "'\\''")}'`;
+      }
+
+      const repoSafe = input.repository.replace(/'/g, "");
+      const result = await sshManager.exec(
+        sshConfig,
+        `curl -sf -m 10 ${authHeaderVal} ${registry.url}/v2/${repoSafe}/tags/list 2>/dev/null`
+      );
+
+      if (result.code !== 0) {
+        return { tags: [] };
+      }
+
+      try {
+        const data = JSON.parse(result.stdout);
+        return { tags: data.tags || [] };
+      } catch (err) {
+        return { tags: [] };
+      }
     }),
 });

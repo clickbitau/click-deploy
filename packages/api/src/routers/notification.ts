@@ -66,7 +66,7 @@ export const notificationRouter = createRouter({
 
       const [updated] = await ctx.db
         .update(notificationChannels)
-        .set({ enabled: channel.enabled === 'true' ? 'false' : 'true' })
+        .set({ enabled: !channel.enabled })
         .where(eq(notificationChannels.id, input.id))
         .returning();
 

@@ -98,8 +98,8 @@ export const githubRouter = createRouter({
         organizationId: ctx.session.organizationId,
         appId: appData.id.toString(),
         clientId: appData.client_id,
-        clientSecret: appData.client_secret,
-        webhookSecret: appData.webhook_secret,
+        clientSecret: encryptPrivateKey(appData.client_secret),
+        webhookSecret: encryptPrivateKey(appData.webhook_secret),
         privateKey: encryptPrivateKey(appData.pem),
         name: appData.name,
       });

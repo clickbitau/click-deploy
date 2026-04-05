@@ -134,8 +134,12 @@ export const nodeRouter = createRouter({
           });
 
           if (result.success) {
+            // If Tailscale is detected, use its IP as the primary host
+            // This ensures all nodes communicate via Tailscale mesh
+            const effectiveHost = result.tailscaleIp || input.host;
             await ctx.db.update(nodes).set({
               status: 'online',
+              host: effectiveHost,
               dockerVersion: result.dockerVersion,
               runtimeType: result.runtimeType || 'host',
               hasTailscale: result.hasTailscale || false,
@@ -209,7 +213,7 @@ export const nodeRouter = createRouter({
 
           if (managerNode?.sshKey) {
             const sshConfig = {
-              host: managerNode.host,
+              host: managerNode.tailscaleIp || managerNode.host,
               port: managerNode.port,
               username: managerNode.sshUser,
               privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -277,7 +281,7 @@ export const nodeRouter = createRouter({
 
           if (managerNode?.sshKey) {
             const sshConfig = {
-              host: managerNode.host,
+              host: managerNode.tailscaleIp || managerNode.host,
               port: managerNode.port,
               username: managerNode.sshUser,
               privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -391,7 +395,7 @@ export const nodeRouter = createRouter({
 
       if (managerNode?.sshKey) {
         sshManager.setManagerConfig({
-          host: managerNode.host,
+          host: managerNode.tailscaleIp || managerNode.host,
           port: managerNode.port,
           username: managerNode.sshUser,
           privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -442,7 +446,7 @@ export const nodeRouter = createRouter({
 
       if (managerNode?.sshKey) {
         sshManager.setManagerConfig({
-          host: managerNode.host,
+          host: managerNode.tailscaleIp || managerNode.host,
           port: managerNode.port,
           username: managerNode.sshUser,
           privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -452,15 +456,18 @@ export const nodeRouter = createRouter({
       const result = await deploymentEngine.testNodeConnectivity({
         id: node.id,
         name: node.name,
-        host: node.host,
+        host: node.tailscaleIp || node.host,
         port: node.port,
         sshUser: node.sshUser,
         privateKey: decryptPrivateKey(node.sshKey.privateKey),
       });
 
       if (result.success) {
+        // If Tailscale is detected, use its IP as the primary host
+        const effectiveHost = result.tailscaleIp || node.host;
         await ctx.db.update(nodes).set({
           status: 'online',
+          host: effectiveHost,
           dockerVersion: result.dockerVersion,
           runtimeType: result.runtimeType || 'host',
           hasTailscale: result.hasTailscale || false,
@@ -486,7 +493,7 @@ export const nodeRouter = createRouter({
             const managerNodeConfig = {
               id: node.id,
               name: node.name,
-              host: node.host,
+              host: node.tailscaleIp || node.host,
               port: node.port,
               sshUser: node.sshUser,
               privateKey: decryptPrivateKey(node.sshKey.privateKey)
@@ -527,7 +534,7 @@ export const nodeRouter = createRouter({
 
           if (orgRegistry?.url) {
             const nodeSshConfig = {
-              host: node.host,
+              host: node.tailscaleIp || node.host,
               port: node.port,
               username: node.sshUser,
               privateKey: decryptPrivateKey(node.sshKey.privateKey),

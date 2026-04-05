@@ -19,6 +19,7 @@ import {
   XCircle,
   Clock,
   Play,
+  Database,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
@@ -55,6 +56,7 @@ export default function ProjectDetailPage() {
   const triggerDeploy = trpc.deployment.trigger.useMutation();
 
   const [showAddService, setShowAddService] = useState(false);
+  const [showAddDatabase, setShowAddDatabase] = useState(false);
   const [showEditProject, setShowEditProject] = useState(false);
   const [deployingServiceId, setDeployingServiceId] = useState<string | null>(null);
   const confirm = useConfirm();
@@ -167,6 +169,10 @@ export default function ProjectDetailPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button onClick={() => setShowAddDatabase(true)} className="btn-secondary flex items-center gap-2 text-white/80 hover:text-white border-white/10 hover:border-white/20 transition-all font-medium py-2 px-4 rounded-lg border bg-black/20">
+              <Database className="w-4 h-4" />
+              Add Database
+            </button>
             <button onClick={() => setShowAddService(true)} className="btn-primary flex items-center gap-2">
               <Plus className="w-4 h-4" />
               Add Service
@@ -294,6 +300,14 @@ export default function ProjectDetailPage() {
         onClose={() => setShowAddService(false)}
         projectId={projectId}
         onSuccess={() => { setShowAddService(false); refetch(); }}
+      />
+
+      {/* Add Database SlideOver */}
+      <AddDatabaseSlideOver
+        open={showAddDatabase}
+        onClose={() => setShowAddDatabase(false)}
+        projectId={projectId}
+        onSuccess={() => { setShowAddDatabase(false); refetch(); }}
       />
 
       {/* Edit Project SlideOver */}
@@ -575,6 +589,123 @@ function EditProjectSlideOver({ open, onClose, project, onSuccess }: {
         >
           {updateProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Settings2 className="w-4 h-4" />}
           {updateProject.isPending ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+    </SlideOver>
+  );
+}
+
+// ── Add Database SlideOver ───────────────────────────────────
+
+function AddDatabaseSlideOver({ open, onClose, projectId, onSuccess }: {
+  open: boolean; onClose: () => void; projectId: string; onSuccess: () => void;
+}) {
+  const createService = trpc.service.create.useMutation();
+  const { data: nodesList } = trpc.node.list.useQuery(undefined, { enabled: open });
+
+  const databases = [
+    { id: 'postgres', name: 'PostgreSQL', image: 'postgres', defaultTag: '15', defaultPort: 5432, defaultVolume: '/var/lib/postgresql/data' },
+    { id: 'redis', name: 'Redis', image: 'redis', defaultTag: '7-alpine', defaultPort: 6379, defaultVolume: '/data' },
+    { id: 'mysql', name: 'MySQL', image: 'mysql', defaultTag: '8.0', defaultPort: 3306, defaultVolume: '/var/lib/mysql' },
+    { id: 'mongo', name: 'MongoDB', image: 'mongo', defaultTag: '6.0', defaultPort: 27017, defaultVolume: '/data/db' },
+  ];
+
+  const [dbType, setDbType] = useState(databases[0]);
+  const [name, setName] = useState('my-postgres');
+  const [password, setPassword] = useState('');
+  const [targetNodeId, setTargetNodeId] = useState('');
+
+  const handleClose = () => {
+    setName('my-postgres'); setPassword(''); setTargetNodeId(''); setDbType(databases[0]);
+    onClose();
+  };
+
+  const handleCreate = () => {
+    if (!name) return;
+    
+    // Auto-generate strong password if left blank
+    const generatePassword = () => Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + 'A1!';
+    const finalPassword = password || generatePassword();
+
+    let envVars: any = {};
+    if (dbType.id === 'postgres') envVars = { POSTGRES_PASSWORD: finalPassword };
+    if (dbType.id === 'mysql') envVars = { MYSQL_ROOT_PASSWORD: finalPassword };
+    if (dbType.id === 'mongo') envVars = { MONGO_INITDB_ROOT_USERNAME: 'admin', MONGO_INITDB_ROOT_PASSWORD: finalPassword };
+
+    createService.mutate({
+      name,
+      projectId,
+      sourceType: 'image',
+      imageName: dbType.image,
+      imageTag: dbType.defaultTag,
+      type: dbType.id as any,
+      ports: [{ container: dbType.defaultPort, protocol: 'tcp' }],
+      targetNodeId: targetNodeId || undefined,
+      envVars,
+      volumes: [{ name: 'data', mountPath: dbType.defaultVolume, type: 'volume' }],
+    }, {
+      onSuccess: () => { 
+        handleClose(); 
+        onSuccess(); 
+        toast.success(`${dbType.name} database created successfully`);
+      },
+      onError: (err: any) => toast.error(`Failed to create database: ${err.message}`),
+    });
+  };
+
+  const nodes = nodesList || [];
+
+  return (
+    <SlideOver open={open} onClose={handleClose} title="Create Database" description="Provision a fully managed database service">
+      <div className="space-y-5">
+        <FormField label="Database Type">
+          <FormSelect
+            value={dbType.id}
+            onChange={(e) => {
+              const dt = databases.find(d => d.id === e.target.value)!;
+              setDbType(dt);
+              setName(`my-${dt.id}`);
+            }}
+          >
+            {databases.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </FormSelect>
+        </FormField>
+
+        <FormField label="Service Name">
+          <FormInput value={name} onChange={(e) => setName(e.target.value)} placeholder={`e.g. my-${dbType.id}`} />
+        </FormField>
+
+        {dbType.id !== 'redis' && (
+          <FormField label="Root Password">
+            <FormInput 
+              type="password"
+              value={password} 
+              onChange={(e) => setPassword(e.target.value)} 
+              placeholder="Leave blank to auto-generate" 
+            />
+          </FormField>
+        )}
+
+        <FormField label="Deploy Node">
+          <FormSelect value={targetNodeId} onChange={(e) => setTargetNodeId(e.target.value)}>
+            <option value="">Auto-balance</option>
+            {nodes.map((n: any) => <option key={n.id} value={n.id}>{n.name}</option>)}
+          </FormSelect>
+        </FormField>
+
+        {createService.isError && (
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-xs text-red-400">
+            ✗ {createService.error?.message}
+          </div>
+        )}
+
+        <button
+          onClick={handleCreate}
+          disabled={!name || createService.isPending}
+          className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50 mt-4"
+        >
+          {createService.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+          {createService.isPending ? 'Provisioning...' : 'Create ' + dbType.name}
         </button>
       </div>
     </SlideOver>

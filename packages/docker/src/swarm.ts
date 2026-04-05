@@ -204,6 +204,7 @@ export class SwarmManager {
       memoryReservation?: string;
     };
     networks?: string[];
+    mounts?: Array<{ type: string; source: string; target: string; readonly?: boolean }>;
   }): Promise<string> {
     const args: string[] = ['docker', 'service', 'create', '--detach=true', '--no-resolve-image'];
 
@@ -278,6 +279,15 @@ export class SwarmManager {
       }
     }
 
+    // Mounts
+    if (opts.mounts) {
+      for (const mount of opts.mounts) {
+        let mountArg = `type=${mount.type},source=${mount.source},target=${mount.target}`;
+        if (mount.readonly) mountArg += ',readonly';
+        args.push('--mount', mountArg);
+      }
+    }
+
     // Image (must be last)
     args.push(opts.image);
 
@@ -311,6 +321,7 @@ export class SwarmManager {
       labels?: Record<string, string>;
       constraints?: string[];
       force?: boolean;
+      mounts?: Array<{ type: string; source: string; target: string; readonly?: boolean }>;
     }
   ): Promise<void> {
     const args: string[] = ['docker', 'service', 'update', '--detach=true', '--no-resolve-image'];
@@ -348,6 +359,14 @@ export class SwarmManager {
       args.push('--force');
     }
 
+    if (opts?.mounts) {
+      for (const mount of opts.mounts) {
+        let mountArg = `type=${mount.type},source=${mount.source},target=${mount.target}`;
+        if (mount.readonly) mountArg += ',readonly';
+        args.push('--mount-add', mountArg);
+      }
+    }
+
     args.push(serviceName);
 
     const result = await sshManager.exec(this.sshConfig, args.join(' '));
@@ -374,6 +393,54 @@ export class SwarmManager {
    */
   async removeService(serviceName: string): Promise<void> {
     await this.cli.exec(`service rm ${serviceName}`);
+  }
+
+  // ── Swarm Stacks (Docker Compose) ─────────────────────────
+
+  /**
+   * Deploy a Docker Compose file as a Swarm Stack
+   */
+  async deployStack(
+    stackName: string,
+    composeContent: string,
+    opts?: { envVars?: Record<string, string> }
+  ): Promise<void> {
+    const tmpFile = `/tmp/click-deploy-stack-${stackName}-${Date.now()}.yml`;
+    
+    // Write compose file to manager node
+    const safeContent = composeContent.replace(/'/g, "'\\''");
+    await sshManager.exec(this.sshConfig, `echo '${safeContent}' > ${tmpFile}`);
+
+    try {
+      // Build env vars
+      const envExports = [];
+      if (opts?.envVars) {
+        for (const [key, value] of Object.entries(opts.envVars)) {
+          envExports.push(`export ${key}=${escapeBash(value)}`);
+        }
+      }
+
+      const envCmd = envExports.length > 0 ? `${envExports.join('; ')}; ` : '';
+      const deployCmd = `${envCmd}docker stack deploy --compose-file ${tmpFile} ${stackName}`;
+
+      const result = await sshManager.exec(this.sshConfig, deployCmd);
+      if (result.code !== 0) {
+        throw new Error(`Failed to deploy stack: ${result.stderr}`);
+      }
+    } finally {
+      // Cleanup
+      await sshManager.exec(this.sshConfig, `rm ${tmpFile}`);
+    }
+  }
+
+  /**
+   * Remove a Swarm Stack
+   */
+  async removeStack(stackName: string): Promise<void> {
+    const result = await sshManager.exec(this.sshConfig, `docker stack rm ${stackName}`);
+    if (result.code !== 0 && !result.stderr.includes('not found')) {
+      throw new Error(`Failed to remove stack: ${result.stderr}`);
+    }
   }
 
   /**

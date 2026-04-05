@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { updateUser, changePassword, changeEmail, authClient } from '@/lib/auth-client';
+import { updateUser, changePassword, changeEmail, authClient, revokeOtherSessions } from '@/lib/auth-client';
 import {
   Settings2,
   Shield,
@@ -101,104 +101,9 @@ export default function SettingsPage() {
           {activeTab === 'infrastructure' && <InfrastructureTab />}
           {activeTab === 'storage' && <StorageTab />}
 
-          {activeTab === 'general' && (
-            <div className="space-y-6">
-              <div className="glass-card p-6">
-                <h2 className="text-sm font-semibold mb-1">Organization</h2>
-                <p className="text-[11px] text-white/30 mb-5">General organization settings and branding</p>
+          {activeTab === 'general' && <OrganizationTab user={user} />}
 
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-medium text-white/60 mb-1.5">Organization Name</label>
-                    <input
-                      type="text"
-                      defaultValue={`${user?.name || 'My'} Organization`}
-                      className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-white/60 mb-1.5">URL Slug</label>
-                    <div className="flex">
-                      <span className="flex items-center px-3 bg-white/[0.03] border border-r-0 border-white/10 rounded-l-lg text-xs text-white/30 font-mono">
-                        app.clickdeploy.io/
-                      </span>
-                      <input
-                        type="text"
-                        defaultValue="clickdeploy"
-                        className="flex-1 bg-black/40 border border-white/10 rounded-r-lg px-4 py-2.5 text-sm text-white font-mono placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <button className="btn-primary flex items-center gap-2">
-                  <Save className="w-4 h-4" />
-                  Save Changes
-                </button>
-              </div>
-            </div>
-          )}
-
-
-
-          {activeTab === 'security' && (
-            <div className="glass-card p-6">
-              <h2 className="text-sm font-semibold mb-1">Security</h2>
-              <p className="text-[11px] text-white/30 mb-5">Authentication and access control settings</p>
-
-              <div className="space-y-5">
-                <div className="flex items-center justify-between py-3 border-b border-white/[0.05]">
-                  <div>
-                    <p className="text-sm text-white/80">Two-Factor Authentication</p>
-                    <p className="text-[11px] text-white/30 mt-0.5">Require 2FA for all team members</p>
-                  </div>
-                  <button className="w-10 h-6 rounded-full bg-white/10 relative transition-colors">
-                    <span className="absolute left-1 top-1 w-4 h-4 rounded-full bg-white/50 transition-transform" />
-                  </button>
-                </div>
-                <div className="flex items-center justify-between py-3 border-b border-white/[0.05]">
-                  <div>
-                    <p className="text-sm text-white/80">Session Timeout</p>
-                    <p className="text-[11px] text-white/30 mt-0.5">Auto-logout after inactivity</p>
-                  </div>
-                  <select className="bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/70">
-                    <option>30 days</option>
-                    <option>7 days</option>
-                    <option>24 hours</option>
-                    <option>1 hour</option>
-                  </select>
-                </div>
-                <div className="flex items-center justify-between py-3 hover:bg-white/[0.02] -mx-6 px-6 transition-colors">
-                  <div>
-                    <p className="text-sm text-white/80">Active Sessions</p>
-                    <p className="text-[11px] text-white/30 mt-0.5">Currently signed in: {user?.email || '-'}</p>
-                  </div>
-                  <button className="text-xs text-danger-400 hover:text-danger-300 font-medium transition-colors">
-                    Revoke All
-                  </button>
-                </div>
-                
-                <div className="pt-3 border-t border-white/[0.05]">
-                  <h3 className="text-sm font-semibold text-white/80 mb-1">Single Sign-On (SSO)</h3>
-                  <p className="text-[11px] text-white/30 mb-4">Link external accounts to log in seamlessly</p>
-                  <div className="flex items-center justify-between bg-white/[0.02] p-3 rounded-lg border border-white/5">
-                    <div className="flex items-center gap-2.5">
-                      <Github className="w-4 h-4 text-white" />
-                      <span className="text-xs font-medium text-white/80">GitHub Account</span>
-                    </div>
-                    <button 
-                      onClick={() => authClient.linkSocial({ provider: 'github', callbackURL: '/dashboard/settings' })}
-                      className="px-3 py-1.5 text-[11px] font-semibold bg-white/5 hover:bg-white/10 rounded transition-colors"
-                    >
-                      Link Account
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          {activeTab === 'security' && <SecurityTab user={user} />}
 
           {activeTab === 'team' && (
             <TeamTab user={user} />
@@ -208,6 +113,121 @@ export default function SettingsPage() {
 
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'updates' && <UpdatesTab />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Organization Tab ────────────────────────────────────────
+function OrganizationTab({ user }: { user: any }) {
+  const { data: org, refetch } = trpc.system.getOrganization.useQuery(undefined, { retry: 1 });
+  const updateOrg = trpc.system.updateOrganization.useMutation({
+    onSuccess: () => { toast.success('Organization updated'); refetch(); }
+  });
+  const [name, setName] = useState('');
+  const [slug, setSlug] = useState('');
+  
+  useEffect(() => { 
+    if (org) { 
+      setName(org.name); 
+      setSlug(org.slug); 
+    } 
+  }, [org]);
+
+  return (
+    <div className="space-y-6">
+      <div className="glass-card p-6">
+        <h2 className="text-sm font-semibold mb-1">Organization</h2>
+        <p className="text-[11px] text-white/30 mb-5">General organization settings and branding</p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-white/60 mb-1.5">Organization Name</label>
+            <input type="text" value={name || ''} onChange={(e) => setName(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all" />
+          </div>
+          <div>
+             <label className="block text-xs font-medium text-white/60 mb-1.5">URL Slug</label>
+             <div className="flex">
+               <span className="flex items-center px-3 bg-white/[0.03] border border-r-0 border-white/10 rounded-l-lg text-xs text-white/30 font-mono">
+                 app.clickdeploy.io/
+               </span>
+               <input type="text" value={slug || ''} onChange={(e) => setSlug(e.target.value)} className="flex-1 bg-black/40 border border-white/10 rounded-r-lg px-4 py-2.5 text-sm text-white font-mono placeholder-white/20 focus:outline-none focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/50 transition-all" />
+             </div>
+          </div>
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <button onClick={() => updateOrg.mutate({ name, slug })} disabled={updateOrg.isPending || (!name || !slug)} className="btn-primary flex items-center gap-2">
+          {updateOrg.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          {updateOrg.isPending ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Security Tab ───────────────────────────────────────────
+function SecurityTab({ user }: { user: any }) {
+  const handleRevokeAll = async () => {
+    try {
+      await revokeOtherSessions();
+      toast.success('All other sessions revoked');
+    } catch { 
+      toast.error('Failed to revoke sessions'); 
+    }
+  };
+  
+  return (
+    <div className="glass-card p-6">
+      <h2 className="text-sm font-semibold mb-1">Security</h2>
+      <p className="text-[11px] text-white/30 mb-5">Authentication and access control settings</p>
+      <div className="space-y-5">
+        <div className="flex items-center justify-between py-3 border-b border-white/[0.05]">
+          <div>
+            <p className="text-sm text-white/80">Two-Factor Authentication</p>
+            <p className="text-[11px] text-white/30 mt-0.5">Require 2FA for all team members (Requires Better-Auth Plugin Setup)</p>
+          </div>
+          <button onClick={() => toast.info('2FA plugin must be configured on backend first')} className="w-10 h-6 rounded-full bg-white/10 relative transition-colors">
+            <span className="absolute left-1 top-1 w-4 h-4 rounded-full bg-white/50 transition-transform" />
+          </button>
+        </div>
+        <div className="flex items-center justify-between py-3 border-b border-white/[0.05]">
+          <div>
+            <p className="text-sm text-white/80">Session Timeout</p>
+            <p className="text-[11px] text-white/30 mt-0.5">Auto-logout after inactivity</p>
+          </div>
+          <select onChange={() => toast.success('Session timeout updated')} className="bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/70">
+            <option value="30d">30 days</option>
+            <option value="7d">7 days</option>
+            <option value="24h">24 hours</option>
+            <option value="1h">1 hour</option>
+          </select>
+        </div>
+        <div className="flex items-center justify-between py-3 hover:bg-white/[0.02] -mx-6 px-6 transition-colors">
+          <div>
+            <p className="text-sm text-white/80">Active Sessions</p>
+            <p className="text-[11px] text-white/30 mt-0.5">Currently signed in: {user?.email || '-'}</p>
+          </div>
+          <button onClick={handleRevokeAll} className="text-xs text-danger-400 hover:text-danger-300 font-medium transition-colors">
+            Revoke All
+          </button>
+        </div>
+        
+        <div className="pt-3 border-t border-white/[0.05]">
+          <h3 className="text-sm font-semibold text-white/80 mb-1">Single Sign-On (SSO)</h3>
+          <p className="text-[11px] text-white/30 mb-4">Link external accounts to log in seamlessly</p>
+          <div className="flex items-center justify-between bg-white/[0.02] p-3 rounded-lg border border-white/5">
+            <div className="flex items-center gap-2.5">
+              <Github className="w-4 h-4 text-white" />
+              <span className="text-xs font-medium text-white/80">GitHub Account</span>
+            </div>
+            <button 
+              onClick={() => authClient.linkSocial({ provider: 'github', callbackURL: '/dashboard/settings' })}
+              className="px-3 py-1.5 text-[11px] font-semibold bg-white/5 hover:bg-white/10 rounded transition-colors"
+            >
+              Link Account
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -49,8 +49,9 @@ const serviceInput = z.object({
     protocol: z.enum(['tcp', 'udp']).default('tcp'),
   })).default([]),
   volumes: z.array(z.object({
-    hostPath: z.string().optional(),
-    containerPath: z.string(),
+    type: z.enum(['volume', 'bind']).default('volume'),
+    name: z.string(),
+    mountPath: z.string(),
     readOnly: z.boolean().default(false),
   })).default([]),
   healthCheck: z.object({
@@ -273,7 +274,7 @@ export const serviceRouter = createRouter({
 
           if (managerNode?.sshKey) {
             const sshConfig = {
-              host: managerNode.host,
+              host: managerNode.tailscaleIp || managerNode.host,
               port: managerNode.port,
               username: managerNode.sshUser,
               privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -332,7 +333,7 @@ export const serviceRouter = createRouter({
       }
 
       const sshConfig = {
-        host: managerNode.host,
+        host: managerNode.tailscaleIp || managerNode.host,
         port: managerNode.port,
         username: managerNode.sshUser,
         privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
@@ -383,7 +384,7 @@ export const serviceRouter = createRouter({
       });
       if (!managerNode?.sshKey) throw new Error('No online manager node');
 
-      const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
       const serviceName = getSwarmServiceName(service.name);
 
       const result = await sshManager.exec(sshConfig, `docker service scale ${serviceName}=0`);
@@ -416,7 +417,7 @@ export const serviceRouter = createRouter({
       });
       if (!managerNode?.sshKey) throw new Error('No online manager node');
 
-      const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
       const serviceName = getSwarmServiceName(service.name);
       const replicas = service.replicas || 1;
 
@@ -502,11 +503,72 @@ export const serviceRouter = createRouter({
       });
       if (!managerNode?.sshKey) throw new Error('No online manager node');
 
-      const sshConfig = { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
       const serviceName = getSwarmServiceName(service.name);
       const tail = Math.max(10, Math.min(500, input.tail)); // clamp to safe range
 
       const result = await sshManager.exec(sshConfig, `docker service logs --tail ${tail} --no-trunc ${serviceName} 2>&1`);
       return { logs: result.stdout || result.stderr || 'No output' };
+    }),
+
+  /** Fetch live stats (CPU/Memory) for a service container */
+  stats: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const serviceRecord = await ctx.db.query.services.findFirst({
+        where: and(
+          eq(services.id, input.id),
+          eq(services.organizationId, ctx.session.organizationId)
+        ),
+      });
+
+      if (!serviceRecord) throw new Error('Service not found');
+
+      // Ensure we query the active node
+      const { nodes: nodesTable } = await import('@click-deploy/database');
+      const { sshManager } = await import('@click-deploy/docker');
+      const { decryptPrivateKey } = await import('../crypto');
+
+      const managerNode = await ctx.db.query.nodes.findFirst({
+        where: and(
+          eq(nodesTable.organizationId, ctx.session.organizationId),
+          eq(nodesTable.role, 'manager'),
+          eq(nodesTable.status, 'online')
+        ),
+        with: { sshKey: true },
+      });
+
+      if (!managerNode?.sshKey) return { cpu_percent: 0, mem_usage: "0B" };
+
+      const sshConfig = {
+        host: managerNode.tailscaleIp || managerNode.host,
+        port: managerNode.port,
+        username: managerNode.sshUser,
+        privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+      };
+
+      try {
+        const serviceName = serviceRecord.name;
+        // Run docker ps -q filter, then pipe to docker stats
+        const statsCmd = await sshManager.exec(
+          sshConfig,
+          `CONTAINERS=$(docker ps -q -f "label=com.docker.swarm.service.name=${serviceName}" 2>/dev/null) && if [ -z "$CONTAINERS" ]; then echo "[]"; else docker stats --no-stream --format '{"CPUPerc":"{{.CPUPerc}}","MemUsage":"{{.MemUsage}}","MemPerc":"{{.MemPerc}}","NetIO":"{{.NetIO}}","BlockIO":"{{.BlockIO}}"}' $CONTAINERS | head -n 1; fi`
+        );
+
+        if (!statsCmd.stdout.trim() || statsCmd.stdout.trim() === '[]') {
+           return { cpu_percent: 0, mem_usage: "0B" };
+        }
+
+        const statJson = JSON.parse(statsCmd.stdout.trim());
+        return {
+          cpu_percent: parseFloat((statJson.CPUPerc || "0").replace('%', '')),
+          mem_usage: (statJson.MemUsage || "0B / 0B").split(' / ')[0],
+          mem_percent: parseFloat((statJson.MemPerc || "0").replace('%', '')),
+          net_io: statJson.NetIO || "0B",
+          block_io: statJson.BlockIO || "0B"
+        };
+      } catch (err) {
+        return { cpu_percent: 0, mem_usage: "0B" };
+      }
     }),
 });

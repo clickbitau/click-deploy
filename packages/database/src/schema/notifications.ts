@@ -10,6 +10,7 @@ import {
   varchar,
   pgEnum,
   index,
+  boolean,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations, users } from './auth';
@@ -33,7 +34,7 @@ export const notificationChannels = pgTable('notification_channels', {
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   type: notificationTypeEnum('type').notNull(),
   config: jsonb('config').notNull().default({}), // encrypted
-  enabled: text('enabled').notNull().default('true'),
+  enabled: boolean('enabled').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({

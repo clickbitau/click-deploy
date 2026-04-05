@@ -2,7 +2,7 @@
 # ============================================================
 # Click-Deploy — One-Line Installer
 # ============================================================
-# Usage: curl -fsSL https://raw.githubusercontent.com/youruser/click-deploy/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/clickbitau/click-deploy/main/install.sh | bash
 #
 # What it does:
 #   1. Checks for Docker & Docker Compose (installs if missing)
@@ -24,7 +24,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 INSTALL_DIR="/opt/click-deploy"
-REPO_RAW="https://raw.githubusercontent.com/youruser/click-deploy/main"
+REPO_RAW="https://raw.githubusercontent.com/clickbitau/click-deploy/main"
 
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
@@ -199,7 +199,7 @@ elif command -v git &> /dev/null; then
     git pull --quiet
   else
     echo -e "${BLUE}→ Cloning Click-Deploy...${NC}"
-    git clone --depth 1 https://github.com/youruser/click-deploy.git . 2>/dev/null || {
+    git clone --depth 1 https://github.com/clickbitau/click-deploy.git . 2>/dev/null || {
       echo -e "${RED}✗ Git clone failed. Place the Click-Deploy files in ${INSTALL_DIR} and re-run.${NC}"
       exit 1
     }

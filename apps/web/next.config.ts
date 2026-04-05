@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  allowedDevOrigins: ["127.0.0.1", "localhost", "10.10.40.101"],
   typescript: {
     // Type checking is done during development; skip during Docker builds
     ignoreBuildErrors: true,

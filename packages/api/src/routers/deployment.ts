@@ -2,7 +2,7 @@
 // Click-Deploy — Deployment Router
 // ============================================================
 import { z } from 'zod';
-import { eq, and, desc, inArray, sql } from 'drizzle-orm';
+import { eq, and, desc, inArray, sql, or } from 'drizzle-orm';
 import { deployments, services, projects, nodes, inAppNotifications } from '@click-deploy/database';
 import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
 import { deploymentEngine } from '../engine';
@@ -145,6 +145,21 @@ export const deploymentRouter = createRouter({
         throw new Error('Service not found');
       }
 
+      // Concurrency Guard: Ensure no existing deployments are active
+      const activeDeployments = await ctx.db.query.deployments.findMany({
+        where: and(
+          eq(deployments.serviceId, input.serviceId),
+          or(
+            inArray(deployments.buildStatus, ['pending', 'building']),
+            inArray(deployments.deployStatus, ['pending', 'deploying'])
+          )
+        ),
+      });
+
+      if (activeDeployments.length > 0) {
+        throw new Error('A deployment is already running for this service. Please wait for it to complete or cancel it.');
+      }
+
       // ── Auto-resolve build node ──────────────────────────
       // Always pick a node with can_build=true at trigger time,
       // Don't trust the service's stale buildNodeId.
@@ -268,7 +283,7 @@ export const deploymentRouter = createRouter({
         throw new Error('Target deployment not found');
       }
 
-      if (!targetDeploy.imageName || !targetDeploy.imageDigest) {
+      if (!targetDeploy.imageName) {
         throw new Error('Target deployment has no image to roll back to');
       }
 

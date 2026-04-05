@@ -25,6 +25,7 @@ import { sshManager, SwarmManager, generateTraefikLabels, type NodeConnectionInf
 import { decryptPrivateKey, decryptEnvVars } from './crypto';
 import { getInstallationToken } from './routers/github';
 import { shellEscape } from './shell';
+import { dispatchDeploymentEvent } from './notifications';
 
 // ── Reserved Ports ──────────────────────────────────────────
 // These ports are used by the platform and should not be assigned to user services
@@ -42,6 +43,7 @@ interface DeploymentContext {
     dockerfilePath: string | null;
     dockerContext: string | null;
     sourceType: string;
+    composeFile: string | null;
     imageName: string | null;
     imageTag: string | null;
     envVars: Record<string, string>;
@@ -53,6 +55,7 @@ interface DeploymentContext {
     swarmServiceId: string | null;
     projectId: string;
     deployNodeIds: string[];
+    volumes: Array<{ type?: string; name: string; mountPath: string }>;
   };
   buildNode: NodeConnectionInfo | null;
   deployNode: NodeConnectionInfo;
@@ -91,7 +94,7 @@ function nodeToConnectionInfo(
   return {
     id: node.id,
     name: node.name,
-    host: node.host,
+    host: node.tailscaleIp || node.host, // Prefer Tailscale IP for mesh connectivity
     port: node.port,
     sshUser: node.sshUser,
     privateKey: decryptPrivateKey(sshKey.privateKey),
@@ -180,6 +183,12 @@ export class DeploymentEngine {
     }
     const logs = this.deploymentLogs.get(deploymentId)!;
     logs.push({ step, message, timestamp: new Date(), level });
+    
+    // Bound the log buffer to prevent memory exhaustion
+    if (logs.length > 500) {
+      logs.splice(0, logs.length - 500);
+    }
+    
     console.log(`[deploy] [${step}] ${message}`);
 
     // Fire-and-forget DB update to enable live streaming of logs to the UI
@@ -296,8 +305,10 @@ export class DeploymentEngine {
 
           // 2c. Push to registry
           if (ctx.registry) {
-            this.log(deploymentId, 'push', `Pushing to ${ctx.registry.url}`);
-            await this.dockerPush(deploymentId, ctx.buildNode, fullImage, ctx.registry);
+            const imageDigest = await this.dockerPush(deploymentId, ctx.buildNode, fullImage, ctx.registry);
+            if (imageDigest) {
+              await updateDeployment(deploymentId, { imageDigest });
+            }
 
             // Tag as :latest so next build can use --cache-from
             try {
@@ -354,37 +365,30 @@ export class DeploymentEngine {
       }
 
       // ── Step 4: Monitor convergence ──────────────────────
-      this.log(deploymentId, 'monitor', 'Watching service convergence...');
-      const swarm = new SwarmManager(ctx.managerNode);
-      const serviceName = this.getSwarmServiceName(ctx.service);
-      const convergence = await swarm.watchServiceConvergence(serviceName, 120_000);
+      // deployToSwarm already verifies convergence; if we reached here, it succeeded!
+      this.log(deploymentId, 'complete', 'Deployment successful!', 'success');
+      
+      await updateDeployment(deploymentId, {
+        deployStatus: 'running',
+        deployDurationMs: deployStartTime ? Date.now() - deployStartTime : null,
+        deployLogs: this.logsToText(deploymentId),
+        completedAt: new Date(),
+      });
 
-      if (convergence.converged) {
-        this.log(deploymentId, 'complete', 'Deployment successful!', 'success');
-        await updateDeployment(deploymentId, {
-          deployStatus: 'running',
-          deployDurationMs: deployStartTime ? Date.now() - deployStartTime : null,
-          deployLogs: this.logsToText(deploymentId),
-          completedAt: new Date(),
-        });
+      // Update service status
+      await db.update(services)
+        .set({ status: 'running', updatedAt: new Date() })
+        .where(eq(services.id, ctx.service.id));
 
-        // Update service status
-        await db.update(services)
-          .set({ status: 'running', updatedAt: new Date() })
-          .where(eq(services.id, ctx.service.id));
-
-        // Notify: deploy success
-        db.insert(inAppNotifications).values({
-          organizationId: ctx.organizationId,
-          title: `Deploy succeeded: ${ctx.service.name}`,
-          message: ctx.commitSha ? `Commit ${ctx.commitSha.slice(0, 7)} is now live` : 'Service is now running',
-          level: 'success',
-          category: 'deployment',
-          resourceId: deploymentId,
-        }).catch(() => {});
-      } else {
-        throw new Error(`Service failed to converge: ${convergence.error}`);
-      }
+      // Notify: deploy success
+      await dispatchDeploymentEvent(
+        db,
+        ctx.organizationId,
+        'deploy_success',
+        ctx.service.name,
+        ctx.commitSha ? `Commit ${ctx.commitSha.slice(0, 7)} is now live` : 'Service is now running',
+        deploymentId
+      );
 
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -418,14 +422,14 @@ export class DeploymentEngine {
             with: { service: { with: { project: true } } },
           });
           if (failCtx?.service) {
-            db.insert(inAppNotifications).values({
-              organizationId: failCtx.service.project.organizationId,
-              title: `Deploy failed: ${failCtx.service.name}`,
-              message: message.slice(0, 200),
-              level: 'error',
-              category: 'deployment',
-              resourceId: deploymentId,
-            }).catch(() => {});
+            await dispatchDeploymentEvent(
+              db,
+              failCtx.service.project.organizationId,
+              'deploy_fail',
+              failCtx.service.name,
+              message.slice(0, 500),
+              deploymentId
+            );
           }
         } catch { /* best-effort */ }
       }
@@ -457,7 +461,11 @@ export class DeploymentEngine {
       await updateDeployment(deploymentId, { deployStatus: 'deploying' });
       const deployStartTime = Date.now();
 
-      await this.deployToSwarm(deploymentId, ctx, deployment.imageName);
+      const imageTarget = deployment.imageDigest 
+        ? `${deployment.imageName}@${deployment.imageDigest}` 
+        : deployment.imageName;
+
+      await this.deployToSwarm(deploymentId, ctx, imageTarget);
 
       const swarm = new SwarmManager(ctx.managerNode);
       const serviceName = this.getSwarmServiceName(ctx.service);
@@ -506,7 +514,7 @@ export class DeploymentEngine {
   }> {
     try {
       const sshConfig = {
-        host: node.host,
+        host: node.tailscaleIp || node.host,
         port: node.port,
         username: node.sshUser,
         privateKey: node.privateKey,
@@ -716,7 +724,7 @@ export class DeploymentEngine {
 
     // Set up SSH tunnelling so Tailscale IPs (100.x.x.x) route through the manager node
     sshManager.setManagerConfig({
-      host: managerNode.host,
+      host: managerNode.tailscaleIp || managerNode.host,
       port: managerNode.port,
       username: managerNode.sshUser,
       privateKey: managerNode.privateKey,
@@ -738,7 +746,7 @@ export class DeploymentEngine {
         this.log(deploymentId, 'resolve', `Build node ${buildNode.host} is on Tailscale but registry is at ${registryForBuild.url} — resolving Tailscale-routable address...`);
         try {
           const tsResult = await sshManager.exec(
-            { host: managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: managerNode.privateKey },
+            { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: managerNode.privateKey },
             'tailscale ip -4 2>/dev/null'
           );
           const managerTsIP = tsResult.stdout.trim();
@@ -763,6 +771,7 @@ export class DeploymentEngine {
         dockerfilePath: deployment.service.dockerfilePath,
         dockerContext: deployment.service.dockerContext,
         sourceType: deployment.service.sourceType,
+        composeFile: deployment.service.composeFile,
         imageName: deployment.service.imageName,
         imageTag: deployment.service.imageTag,
         envVars: decryptEnvVars(deployment.service.envVars),
@@ -774,6 +783,7 @@ export class DeploymentEngine {
         swarmServiceId: deployment.service.swarmServiceId,
         projectId: deployment.service.projectId,
         deployNodeIds: (deployment.service.deployNodeIds as string[]) || [],
+        volumes: (deployment.service.volumes as any[]) || [],
       },
       buildNode,
       deployNode,
@@ -808,7 +818,7 @@ export class DeploymentEngine {
     organizationId?: string
   ) {
     const sshConfig = {
-      host: node.host,
+      host: node.tailscaleIp || node.host,
       port: node.port,
       username: node.sshUser,
       privateKey: node.privateKey,
@@ -861,7 +871,7 @@ export class DeploymentEngine {
     cacheFromImage?: string
   ) {
     const sshConfig = {
-      host: node.host,
+      host: node.tailscaleIp || node.host,
       port: node.port,
       username: node.sshUser,
       privateKey: node.privateKey,
@@ -977,9 +987,9 @@ export class DeploymentEngine {
     node: NodeConnectionInfo,
     imageName: string,
     registry: DeploymentContext['registry']
-  ) {
+  ): Promise<string | undefined> {
     const sshConfig = {
-      host: node.host,
+      host: node.tailscaleIp || node.host,
       port: node.port,
       username: node.sshUser,
       privateKey: node.privateKey,
@@ -1012,6 +1022,8 @@ export class DeploymentEngine {
       }
     }
 
+    let imageDigest: string | undefined;
+
     // Stream push so progress is visible in real-time
     this.log(deploymentId, 'push', `Pushing to ${registry?.url || 'registry'}...`);
     const pushResult = await sshManager.execStream(
@@ -1023,6 +1035,11 @@ export class DeploymentEngine {
         if (trimmed && !trimmed.startsWith('The push refers to')) {
           this.log(deploymentId, 'push', trimmed);
         }
+        // Extract digest
+        const digestMatch = trimmed.match(/digest:\s+(sha256:[a-f0-9]+)/);
+        if (digestMatch) {
+          imageDigest = digestMatch[1];
+        }
       }
     );
     if (pushResult.code !== 0) {
@@ -1030,6 +1047,7 @@ export class DeploymentEngine {
     }
 
     this.log(deploymentId, 'push', `Pushed ${imageName} to registry`, 'success');
+    return imageDigest;
   }
 
   private async deployToSwarm(
@@ -1131,13 +1149,36 @@ export class DeploymentEngine {
       }
     }
 
+    if (ctx.service.sourceType === 'compose' && ctx.service.composeFile) {
+      this.log(deploymentId, 'deploy', `Deploying Docker Compose stack: ${serviceName}`);
+      await swarm.deployStack(serviceName, ctx.service.composeFile, {
+        envVars: ctx.service.envVars,
+      });
+
+      // We still want to monitor it
+      this.log(deploymentId, 'deploy', `Waiting for stack ${serviceName} to converge...`);
+      const convergence = await swarm.watchServiceConvergence(`${serviceName}_${ctx.service.name || 'app'}`, 180000);
+      if (!convergence.converged) {
+        this.log(deploymentId, 'deploy', `Stack healthcheck failed.`, 'error');
+        throw new Error(convergence.error || 'Stack failed to converge');
+      }
+      return;
+    }
+
     if (serviceExists) {
+      const mounts = (ctx.service.volumes as any[] || []).map((v) => ({
+        type: v.type || 'volume',
+        source: `${serviceName}_${v.name}`,
+        target: v.mountPath,
+      }));
+
       // Update existing service — zero-downtime rolling update
       this.log(deploymentId, 'deploy', `Updating existing service: ${serviceName}`);
       await swarm.updateService(serviceName, image, {
         envVars: ctx.service.envVars,
         replicas: ctx.service.replicas,
         constraints,
+        mounts,
         labels: {
           'click-deploy.service-id': ctx.service.id,
           'click-deploy.deployment-id': deploymentId,
@@ -1204,6 +1245,11 @@ export class DeploymentEngine {
           : undefined,
         resourceLimits: ctx.service.resourceLimits || undefined,
         networks: ['click-deploy-net'],
+        mounts: (ctx.service.volumes as any[] || []).map((v) => ({
+          type: v.type || 'volume',
+          source: `${serviceName}_${v.name}`,
+          target: v.mountPath,
+        })),
       });
 
       // Store swarm service reference
