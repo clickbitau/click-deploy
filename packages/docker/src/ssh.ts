@@ -455,23 +455,28 @@ export class SSHConnectionManager {
       client.exec(command, (err, stream) => {
         if (err) return reject(err);
 
-        let stdout = '';
-        let stderr = '';
         let resolved = false;
         let idleTimer: ReturnType<typeof setTimeout> | null = null;
+        let stdoutRemaining = '';
+        let stderrRemaining = '';
 
         const finish = (code: number) => {
           if (resolved) return;
           resolved = true;
           if (idleTimer) clearTimeout(idleTimer);
-          resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code });
+
+          if (stdoutRemaining) onOutput(stdoutRemaining);
+          if (stderrRemaining) onOutput(stderrRemaining);
+
+          // We intentionally avoid returning giant stdout/stderr buffers 
+          // because it causes V8 memory crashes on massive build logs (npm ci).
+          resolve({ stdout: '', stderr: '', code });
         };
 
         // Wire up AbortSignal to kill the SSH stream
         if (opts?.signal) {
           const onAbort = () => {
             onOutput('[cancel] ⚠ Deployment cancelled — killing build process');
-            // signal('KILL') sends SIGKILL to the remote process
             stream.signal?.('KILL');
             stream.close();
             finish(137); // 137 = SIGKILL
@@ -486,7 +491,7 @@ export class SSHConnectionManager {
         const resetIdleTimer = () => {
           if (idleTimer) clearTimeout(idleTimer);
           idleTimer = setTimeout(() => {
-            onOutput('[build] ⚠ Build timed out (no output for 10 minutes)');
+            onOutput('[build] ⚠ Build timed out (no output for configured limit)');
             stream.close();
             finish(124); // 124 = timeout
           }, idleTimeout);
@@ -495,17 +500,19 @@ export class SSHConnectionManager {
         resetIdleTimer();
 
         stream.on('data', (data: Buffer) => {
-          const chunk = data.toString();
-          stdout += chunk;
           resetIdleTimer();
-          chunk.split(/[\r\n]+/).filter(Boolean).forEach(line => onOutput(line));
+          const chunk = data.toString('utf8');
+          const lines = (stdoutRemaining + chunk).split(/(?:\r\n|\r|\n)/);
+          stdoutRemaining = lines.pop() || '';
+          lines.filter(Boolean).forEach(line => onOutput(line));
         });
 
         stream.stderr.on('data', (data: Buffer) => {
-          const chunk = data.toString();
-          stderr += chunk;
           resetIdleTimer();
-          chunk.split(/[\r\n]+/).filter(Boolean).forEach(line => onOutput(line));
+          const chunk = data.toString('utf8');
+          const lines = (stderrRemaining + chunk).split(/(?:\r\n|\r|\n)/);
+          stderrRemaining = lines.pop() || '';
+          lines.filter(Boolean).forEach(line => onOutput(line));
         });
 
         stream.on('close', (code: number) => {

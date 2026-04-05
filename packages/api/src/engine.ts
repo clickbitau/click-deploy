@@ -921,7 +921,7 @@ export class DeploymentEngine {
         buildDir.includes(':') ? `cd /d "${buildDir}" &&` : `cd ${buildDir} &&`,
         'DOCKER_BUILDKIT=1',
         'BUILDX_NO_DEFAULT_ATTESTATIONS=1',
-        'docker build',
+        'timeout 900 docker build',
         '--provenance=false',
         '--output type=docker',
         `-t ${imageName}`,
@@ -933,7 +933,7 @@ export class DeploymentEngine {
 
       const result = await sshManager.execStream(sshConfig, cmd, (line) => {
         this.log(deploymentId, 'build', line);
-      }, { idleTimeoutMs: 1800000, signal }); // 30 minutes timeout
+      }, { idleTimeoutMs: 300000, signal }); // 5 minutes timeout
 
       if (result.code !== 0) {
         throw new Error(`Docker build failed: ${result.stderr}`);
@@ -966,7 +966,7 @@ export class DeploymentEngine {
         `cd ${buildDir} &&`,
         `DOCKER_BUILDKIT=1`,
         `BUILDX_NO_DEFAULT_ATTESTATIONS=1`,
-        'nixpacks build',
+        'timeout 900 nixpacks build',
         contextPath,
         `--name ${imageName}`,
         '--docker-output type=docker,oci-mediatypes=false',
@@ -975,7 +975,7 @@ export class DeploymentEngine {
 
       const result = await sshManager.execStream(sshConfig, nixCmd, (line) => {
         this.log(deploymentId, 'build', line);
-      }, { idleTimeoutMs: 1800000, signal }); // 30 minutes timeout
+      }, { idleTimeoutMs: 300000, signal }); // 5 minutes timeout
 
       if (result.code !== 0) {
         throw new Error(`Nixpacks build failed: ${result.stderr}`);
