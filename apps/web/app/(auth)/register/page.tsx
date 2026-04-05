@@ -20,11 +20,7 @@ export default function RegisterPage() {
     setIsLoading(true);
 
     try {
-      const result = await signUp.email({
-        email,
-        password,
-        name,
-      });
+      const result = await signUp.email({ email, password, name });
 
       if (result.error) {
         toast.error(result.error.message || 'Registration failed');
@@ -32,8 +28,6 @@ export default function RegisterPage() {
       }
 
       // Create organization for the user
-      // NOTE: userId is intentionally omitted — the server reads it from the session
-      // established by signUp.email() above. This prevents account hijacking.
       const setupRes = await fetch('/api/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

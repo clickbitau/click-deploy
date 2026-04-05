@@ -20,13 +20,8 @@ interface UseRealtimeOptions {
  * Subscribe to Supabase Realtime broadcast events for a specific table.
  * Uses the broadcast triggers set up via `public.realtime_broadcast_row_changes()`.
  *
- * Usage:
- * ```tsx
- * useRealtimeTable({
- *   table: 'deployments',
- *   onchange: () => refetch(),
- * });
- * ```
+ * The user is already authenticated via Supabase Auth, so private channels
+ * work automatically.
  */
 export function useRealtimeTable({
   table,
@@ -34,7 +29,6 @@ export function useRealtimeTable({
   onchange,
   enabled = true,
 }: UseRealtimeOptions) {
-  // Use ref so callback changes don't cause re-subscription
   const callbackRef = useRef(onchange);
   callbackRef.current = onchange;
 
@@ -52,12 +46,7 @@ export function useRealtimeTable({
       });
     }
 
-    channel.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        // Authenticate for private channels
-        await supabase!.realtime.setAuth();
-      }
-    });
+    channel.subscribe();
 
     return () => {
       supabase!.removeChannel(channel);
@@ -86,11 +75,7 @@ export function useRealtimeTables(
         .on('broadcast', { event: 'INSERT' }, (p) => callbackRef.current?.(table, 'INSERT', p))
         .on('broadcast', { event: 'UPDATE' }, (p) => callbackRef.current?.(table, 'UPDATE', p))
         .on('broadcast', { event: 'DELETE' }, (p) => callbackRef.current?.(table, 'DELETE', p))
-        .subscribe(async (status) => {
-          if (status === 'SUBSCRIBED') {
-            await supabase!.realtime.setAuth();
-          }
-        });
+        .subscribe();
       return channel;
     });
 

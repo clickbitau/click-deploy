@@ -66,6 +66,9 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.1.0
         version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@supabase/ssr':
+        specifier: ^0.10.0
+        version: 0.10.0(@supabase/supabase-js@2.101.1)
       '@supabase/supabase-js':
         specifier: ^2.101.1
         version: 2.101.1
@@ -1549,6 +1552,11 @@ packages:
     resolution: {integrity: sha512-Oa6dno0OB9I+hv5do5zsZHbFu41ViZnE9IWjmkeeF/8fPmB5fWoHGqeTYEC3/0DAgtpUoFJa4FpvzFH0SBHo1Q==}
     engines: {node: '>=20.0.0'}
 
+  '@supabase/ssr@0.10.0':
+    resolution: {integrity: sha512-36jIu+DuKzg5EgA3fnH+zHvwASvpKcL4zPgmHoZaULroS5Q4mzeHcM69zJ0sXUHddO5IcHjQNZJ9Vyhl/DdbRw==}
+    peerDependencies:
+      '@supabase/supabase-js': ^2.100.1
+
   '@supabase/storage-js@2.101.1':
     resolution: {integrity: sha512-WhTaUOBgeEvnKLy95Cdlp6+D5igSF/65yC727w1olxbet5nzUvMlajKUWyzNtQu2efrz2cQ7FcdVBdQqgT9YKQ==}
     engines: {node: '>=20.0.0'}
@@ -2168,6 +2176,10 @@ packages:
 
   concat-map@0.0.1:
     resolution: {integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==}
+
+  cookie@1.1.1:
+    resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
+    engines: {node: '>=18'}
 
   copy-anything@4.0.5:
     resolution: {integrity: sha512-7Vv6asjS4gMOuILabD3l739tsaxFQmC+a7pLZm02zyvs8p977bL3zEgq3yDk5rn9B0PbYgIv++jmHcuUab4RhA==}
@@ -4766,6 +4778,11 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@supabase/ssr@0.10.0(@supabase/supabase-js@2.101.1)':
+    dependencies:
+      '@supabase/supabase-js': 2.101.1
+      cookie: 1.1.1
+
   '@supabase/storage-js@2.101.1':
     dependencies:
       iceberg-js: 0.8.1
@@ -5356,6 +5373,8 @@ snapshots:
   color-name@1.1.4: {}
 
   concat-map@0.0.1: {}
+
+  cookie@1.1.1: {}
 
   copy-anything@4.0.5:
     dependencies:

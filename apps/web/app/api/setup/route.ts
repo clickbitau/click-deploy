@@ -1,59 +1,100 @@
 // ============================================================
 // Click-Deploy — Post-Registration Setup
 // ============================================================
-// After a user signs up, we need to create their organization
-// and assign them as owner. This runs as a Next.js API route
-// called by the client after better-auth creates the user.
+// After a user signs up via Supabase Auth, we need to create
+// their organization and link them in our users table.
 //
-// SECURITY: The route verifies that the session's userId matches
-// the requested userId. This prevents callers from hijacking
-// another user's account into a different organization.
+// SECURITY: The route verifies the session via Supabase Auth.
+// The userId is derived server-side from the JWT — never from
+// the request body.
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server';
 import { db, organizations, users, eq } from '@click-deploy/database';
-import { auth } from '@/lib/auth';
+import { createServerClient } from '@supabase/ssr';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { orgName, orgSlug } = body;
 
-    // ── SECURITY: Verify the caller is authenticated ────────
-    // Do NOT accept userId from the request body — always derive
-    // it from the server-side session to prevent account hijacking.
-    const sessionData = await auth.api.getSession({ headers: req.headers });
-    if (!sessionData?.user?.id) {
+    // ── Extract session from Supabase Auth ────────
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+    const cookieHeader = req.headers.get('cookie') || '';
+    const cookieMap = new Map<string, string>();
+    cookieHeader.split(';').forEach((c) => {
+      const [key, ...rest] = c.trim().split('=');
+      if (key) cookieMap.set(key, rest.join('='));
+    });
+
+    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+      cookies: {
+        getAll() {
+          return Array.from(cookieMap.entries()).map(([name, value]) => ({ name, value }));
+        },
+        setAll() {},
+      },
+    });
+
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (!authUser) {
       return NextResponse.json({ error: 'Unauthorized — no active session' }, { status: 401 });
     }
-    const userId = sessionData.user.id;
+
+    const userId = authUser.id;
+    const userName = authUser.user_metadata?.name || authUser.email?.split('@')[0] || 'User';
+    const userEmail = authUser.email || '';
 
     if (!orgName) {
-      return NextResponse.json(
-        { error: 'orgName is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'orgName is required' }, { status: 400 });
     }
 
-    // Check if user already has an organization
-    const user = await db.query.users.findFirst({
+    // Check if user already exists in our users table
+    let user = await db.query.users.findFirst({
       where: eq(users.id, userId),
     });
 
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    // Fallback: match by email (for pre-existing users from Better-Auth migration)
+    if (!user && userEmail) {
+      user = await db.query.users.findFirst({
+        where: eq(users.email, userEmail),
+      });
+      // Update the row's ID to match the new Supabase auth ID
+      if (user) {
+        try {
+          await db.update(users)
+            .set({ id: userId, updatedAt: new Date() })
+            .where(eq(users.id, user.id));
+          user = { ...user, id: userId };
+        } catch {
+          // ID conflict — use existing row as-is
+        }
+      }
     }
 
-    if (user.organizationId) {
+    // If user row already has an organization, we're done
+    if (user?.organizationId) {
       return NextResponse.json({
         message: 'User already has an organization',
         organizationId: user.organizationId,
       });
     }
 
+    // Create user row if it doesn't exist yet
+    if (!user) {
+      const [newUser] = await db.insert(users).values({
+        id: userId,
+        name: userName,
+        email: userEmail,
+        emailVerified: !!authUser.email_confirmed_at,
+        role: 'owner',
+      }).returning();
+      user = newUser;
+    }
+
     // Create organization
     const slug = orgSlug || orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-
-    // Ensure slug is unique by appending a suffix if needed
     const existingOrg = await db.query.organizations.findFirst({
       where: eq(organizations.slug, slug),
     });
@@ -61,21 +102,14 @@ export async function POST(req: NextRequest) {
 
     const [org] = await db
       .insert(organizations)
-      .values({
-        name: orgName,
-        slug: finalSlug,
-      })
+      .values({ name: orgName, slug: finalSlug })
       .returning();
 
     // Assign user to org as owner
     await db
       .update(users)
-      .set({
-        organizationId: org.id,
-        role: 'owner',
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, userId));
+      .set({ organizationId: org.id, role: 'owner', updatedAt: new Date() })
+      .where(eq(users.id, user!.id));
 
     return NextResponse.json({
       success: true,
@@ -84,9 +118,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     console.error('❌ Setup error:', err);
-    return NextResponse.json(
-      { error: err.message || 'Setup failed' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err.message || 'Setup failed' }, { status: 500 });
   }
 }

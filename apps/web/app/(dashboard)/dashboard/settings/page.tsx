@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { updateUser, changePassword, changeEmail, authClient, revokeOtherSessions } from '@/lib/auth-client';
+import { getSupabaseBrowserClient } from '@/lib/supabase';
 import {
   Settings2,
   Shield,
@@ -171,7 +171,9 @@ function OrganizationTab({ user }: { user: any }) {
 function SecurityTab({ user }: { user: any }) {
   const handleRevokeAll = async () => {
     try {
-      await revokeOtherSessions();
+      // Supabase doesn't have revokeOtherSessions; sign out everywhere then re-login
+      const sb = getSupabaseBrowserClient();
+      if (sb) await sb.auth.signOut({ scope: 'others' });
       toast.success('All other sessions revoked');
     } catch { 
       toast.error('Failed to revoke sessions'); 
@@ -223,7 +225,10 @@ function SecurityTab({ user }: { user: any }) {
               <span className="text-xs font-medium text-white/80">GitHub Account</span>
             </div>
             <button 
-              onClick={() => authClient.linkSocial({ provider: 'github', callbackURL: '/dashboard/settings' })}
+              onClick={() => {
+                const sb = getSupabaseBrowserClient();
+                if (sb) sb.auth.linkIdentity({ provider: 'github', options: { redirectTo: `${window.location.origin}/dashboard/settings` } });
+              }}
               className="px-3 py-1.5 text-[11px] font-semibold bg-white/5 hover:bg-white/10 rounded transition-colors"
             >
               Link Account
@@ -1651,7 +1656,9 @@ function ProfileTab({ user, onUserUpdate }: { user: any; onUserUpdate: (u: any) 
     setChangingPwd(true);
     setPwdFeedback(null);
     try {
-      const { error } = await changePassword({ newPassword: newPwd, currentPassword: currentPwd, revokeOtherSessions: true });
+      const sb = getSupabaseBrowserClient();
+      if (!sb) throw new Error('Supabase client not initialized');
+      const { error } = await sb.auth.updateUser({ password: newPwd });
       if (error) {
         setPwdFeedback({ type: 'error', msg: error.message || 'Failed to change password' });
       } else {

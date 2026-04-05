@@ -124,41 +124,17 @@ export const systemRouter = createRouter({
     }),
 
 
-  /** Change the current user's password */
+  /** Change the current user's password — now handled by Supabase Auth client-side */
   changePassword: protectedProcedure
     .input(z.object({
       currentPassword: z.string().min(1),
       newPassword: z.string().min(8),
     }))
-    .mutation(async ({ ctx, input }) => {
-      const { accounts } = await import('@click-deploy/database');
-      const { hashPassword, verifyPassword } = await import('better-auth/crypto');
-
-      // Find the credential account for this user
-      const account = await ctx.db.query.accounts.findFirst({
-        where: and(
-          eq(accounts.userId, ctx.session.userId),
-          eq(accounts.providerId, 'credential'),
-        ),
-      });
-
-      if (!account?.password) {
-        throw new Error('No password credential found for this account');
-      }
-
-      // Verify current password using better-auth's scrypt verifier
-      const valid = await verifyPassword({ hash: account.password, password: input.currentPassword });
-      if (!valid) {
-        throw new Error('Current password is incorrect');
-      }
-
-      // Hash new password with better-auth's scrypt and update
-      const hashed = await hashPassword(input.newPassword);
-      await ctx.db.update(accounts)
-        .set({ password: hashed, updatedAt: new Date() })
-        .where(eq(accounts.id, account.id));
-
-      return { success: true };
+    .mutation(async () => {
+      // Password management is now handled by Supabase Auth.
+      // The frontend calls supabase.auth.updateUser({ password }) directly.
+      // This endpoint is kept for backward compatibility but does nothing.
+      return { success: true, message: 'Password is managed by Supabase Auth. Use the client-side update.' };
     }),
 
   /** Check if there are updates available on the remote repository */

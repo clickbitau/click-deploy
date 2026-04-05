@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
     "@click-deploy/database",
     "@click-deploy/shared",
   ],
-  serverExternalPackages: ["drizzle-orm", "postgres", "better-auth", "ssh2", "cpu-features", "nodemailer"],
+  serverExternalPackages: ["drizzle-orm", "postgres", "ssh2", "cpu-features", "nodemailer"],
 };
 
 export default nextConfig;

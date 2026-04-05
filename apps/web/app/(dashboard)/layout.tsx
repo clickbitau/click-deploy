@@ -31,6 +31,7 @@ import {
 import { ThemeToggle } from '@/components/theme-toggle';
 import { NotificationBell, ToastProvider } from '@/components/notification-bell';
 import { signOut } from '@/lib/auth-client';
+import { getSupabaseBrowserClient } from '@/lib/supabase';
 import { UpdateNotification } from '@/components/update-notification';
 import { ConfirmProvider } from '@/components/confirm-dialog';
 import { trpc } from '@/lib/trpc';
@@ -163,14 +164,17 @@ function UserCard() {
   const [showProfile, setShowProfile] = useState(false);
 
   useEffect(() => {
-    fetch('/api/auth/get-session', { credentials: 'include' })
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (data?.user) {
-          setUser({ name: data.user.name, email: data.user.email, image: data.user.image });
-        }
-      })
-      .catch(() => {});
+    const sb = getSupabaseBrowserClient();
+    if (!sb) return;
+    sb.auth.getUser().then(({ data: { user: authUser } }) => {
+      if (authUser) {
+        setUser({
+          name: authUser.user_metadata?.name || authUser.email?.split('@')[0] || 'User',
+          email: authUser.email || '',
+          image: authUser.user_metadata?.avatar_url || undefined,
+        });
+      }
+    });
   }, []);
 
   const handleSignOut = async () => {
