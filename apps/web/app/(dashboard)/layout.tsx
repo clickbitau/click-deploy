@@ -45,6 +45,7 @@ const navigation = [
   { name: 'Tunnels', href: '/dashboard/tunnels', icon: CloudCog },
   { name: 'Registry', href: '/dashboard/registry', icon: Container },
   { name: 'Monitoring', href: '/dashboard/monitoring', icon: Activity },
+  { name: 'Infrastructure', href: '/dashboard/infrastructure', icon: Server },
 ];
 
 const secondaryNav = [

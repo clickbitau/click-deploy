@@ -1065,4 +1065,36 @@ export const infraRouter = createRouter({
 
       return { success: true, hostname: input.hostname, availability: input.availability };
     }),
+
+  /** Get live status of all Docker Swarm nodes */
+  getSwarmNodes: adminProcedure.query(async ({ ctx }) => {
+    const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
+    const sshConfig = {
+      host: manager.host, port: manager.port,
+      username: manager.sshUser, privateKey: manager.privateKey,
+    };
+    const result = await sshManager.exec(sshConfig, 'docker node ls --format "{{.ID}}|{{.Hostname}}|{{.Status}}|{{.ManagerStatus}}|{{.EngineVersion}}"');
+    if (result.code !== 0) throw new Error(`Failed to fetch swarm nodes: ${result.stderr}`);
+    
+    return result.stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [id, hostname, status, managerStatus, engineVersion] = line.split('|');
+      return { id: id?.trim(), hostname: hostname?.trim(), status: status?.trim(), managerStatus: managerStatus?.trim(), engineVersion: engineVersion?.trim() };
+    });
+  }),
+
+  /** Get live health matrix of all Docker Swarm services */
+  getServiceHealth: adminProcedure.query(async ({ ctx }) => {
+    const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
+    const sshConfig = {
+      host: manager.host, port: manager.port,
+      username: manager.sshUser, privateKey: manager.privateKey,
+    };
+    const result = await sshManager.exec(sshConfig, 'docker service ls --format "{{.Name}}|{{.Mode}}|{{.Replicas}}|{{.Image}}|{{.Ports}}"');
+    if (result.code !== 0) throw new Error(`Failed to fetch swarm services: ${result.stderr}`);
+    
+    return result.stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [name, mode, replicas, image, ports] = line.split('|');
+      return { name: name?.trim(), mode: mode?.trim(), replicas: replicas?.trim(), image: image?.trim(), ports: ports?.trim() };
+    });
+  }),
 });
