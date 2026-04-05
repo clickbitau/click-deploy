@@ -48,7 +48,7 @@ export function encryptPrivateKey(plaintext: string): string {
  */
 export function decryptPrivateKey(encryptedString: string): string {
   if (encryptedString.startsWith('v2:')) {
-    // New v2 format
+    // New v2 format — always uses ENCRYPTION_KEY (or BETTER_AUTH_SECRET fallback)
     const packed = Buffer.from(encryptedString.slice(3), 'base64');
     
     const salt = packed.subarray(0, SALT_LENGTH);
@@ -65,20 +65,31 @@ export function decryptPrivateKey(encryptedString: string): string {
     return decrypted.toString('utf8');
   }
 
-  // Legacy format
-  const key = deriveKey(OLD_SALT);
+  // Legacy format — keys were encrypted with BETTER_AUTH_SECRET before ENCRYPTION_KEY existed.
+  // Try both secrets: BETTER_AUTH_SECRET first (original), then ENCRYPTION_KEY as fallback.
   const packed = Buffer.from(encryptedString, 'base64');
-
   const iv = packed.subarray(0, IV_LENGTH);
   const tag = packed.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
   const ciphertext = packed.subarray(IV_LENGTH + TAG_LENGTH);
 
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(tag);
+  const secretsToTry = [
+    process.env.BETTER_AUTH_SECRET,
+    process.env.ENCRYPTION_KEY,
+  ].filter(Boolean) as string[];
 
-  let decrypted = decipher.update(ciphertext);
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-  return decrypted.toString('utf8');
+  for (const secret of secretsToTry) {
+    try {
+      const key = scryptSync(secret, OLD_SALT, 32);
+      const decipher = createDecipheriv(ALGORITHM, key, iv);
+      decipher.setAuthTag(tag);
+      let decrypted = decipher.update(ciphertext);
+      decrypted = Buffer.concat([decrypted, decipher.final()]);
+      return decrypted.toString('utf8');
+    } catch {
+      // Try next secret
+    }
+  }
+  throw new Error('Failed to decrypt legacy SSH key — neither BETTER_AUTH_SECRET nor ENCRYPTION_KEY could decrypt it');
 }
 
 /**
