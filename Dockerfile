@@ -12,7 +12,7 @@
 
 # ── Stage 1: Dependencies ────────────────────────────────────
 FROM node:22-alpine AS deps
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 # Enable corepack for pnpm
@@ -98,6 +98,9 @@ RUN adduser --system --uid 1001 nextjs
 COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
+
+# Install ws for WebSocket support in production
+RUN npm install --no-save ws ssh2
 
 # Copy package.json for version reads
 COPY --from=builder /app/package.json ./package.json

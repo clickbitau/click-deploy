@@ -35,6 +35,7 @@ import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-
 import { useConfirm } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
 import { useRealtimeTable } from '@/lib/use-realtime';
+import { DockerTerminal } from '@/components/docker-terminal';
 
 const deployStatusConfig: Record<string, { icon: typeof CheckCircle2; class: string; dot: string; label: string }> = {
   running: { icon: CheckCircle2, class: 'text-success-400', dot: 'status-running', label: 'Running' },
@@ -98,7 +99,7 @@ export default function ServiceDetailPage() {
   const deleteDomain = trpc.domain.delete.useMutation();
   const updateService = trpc.service.update.useMutation();
 
-  const [tab, setTab] = useState<'overview' | 'deployments' | 'domains' | 'env' | 'logs' | 'resources' | 'settings'>('overview');
+  const [tab, setTab] = useState<'overview' | 'deployments' | 'domains' | 'env' | 'logs' | 'terminal' | 'resources' | 'settings'>('overview');
   const [showAddDomain, setShowAddDomain] = useState(false);
   const [showEnvVars, setShowEnvVars] = useState(false);
   const deploying = hasActiveDeployment || triggerDeploy.isPending;
@@ -174,6 +175,7 @@ export default function ServiceDetailPage() {
     { key: 'domains', label: `Domains (${domains?.length || 0})` },
     { key: 'env', label: 'Environment' },
     { key: 'logs', label: 'Logs' },
+    { key: 'terminal', label: 'Terminal' },
     { key: 'resources', label: 'Resources' },
     { key: 'settings', label: 'Settings' },
   ];
@@ -556,6 +558,11 @@ export default function ServiceDetailPage() {
       {/* ── Logs ───────────────────────────────────────── */}
       {tab === 'logs' && (
         <ServiceLogs serviceId={serviceId} />
+      )}
+
+      {/* ── Terminal ────────────────────────────────────── */}
+      {tab === 'terminal' && (
+        <ServiceTerminal serviceId={serviceId} />
       )}
 
       {/* ── Resources ──────────────────────────────────── */}
@@ -1329,6 +1336,105 @@ function ResourcesEditor({ service, onSave }: { service: any; onSave: () => void
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Resources'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── Service Terminal ─────────────────────────────────────────
+function ServiceTerminal({ serviceId }: { serviceId: string }) {
+  const [selectedContainer, setSelectedContainer] = useState<{ taskId: string; node: string } | null>(null);
+  const [showTerminal, setShowTerminal] = useState(false);
+
+  const { data: containers, isLoading } = trpc.service.getContainers.useQuery(
+    { serviceId },
+    { refetchInterval: 10000 }
+  );
+
+  // We need the node ID for SSH — look it up from the node name
+  const { data: nodes } = trpc.node.list.useQuery();
+
+  const findNodeId = (nodeName: string): string | null => {
+    if (!nodes) return null;
+    const node = nodes.find((n: any) => n.name === nodeName || n.host === nodeName);
+    return node?.id || null;
+  };
+
+  // We need to find the actual Docker container ID (not the swarm task ID)
+  // The task ID from `docker service ps` is a swarm task, not a container ID.
+  // We need to get the container ID from the task.
+
+  return (
+    <div className="glass-card p-6">
+      <div className="flex items-center gap-3 mb-1">
+        <Terminal className="w-4 h-4 text-brand-400" />
+        <h3 className="text-sm font-semibold">Container Terminal</h3>
+      </div>
+      <p className="text-[11px] text-white/30 mb-6">
+        Open an interactive shell session inside a running container.
+      </p>
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-xs text-white/30">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Loading containers...
+        </div>
+      ) : !containers || containers.length === 0 ? (
+        <div className="text-center py-8">
+          <Terminal className="w-8 h-8 text-white/10 mx-auto mb-2" />
+          <p className="text-xs text-white/30">No running containers found</p>
+          <p className="text-[10px] text-white/15 mt-1">Deploy the service first to access the terminal</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Container selector */}
+          {!showTerminal && (
+            <div className="grid gap-2">
+              {containers.map((c: any) => {
+                const nodeId = findNodeId(c.node);
+                return (
+                  <button
+                    key={c.taskId}
+                    onClick={() => {
+                      if (nodeId) {
+                        setSelectedContainer({ taskId: c.name, node: nodeId });
+                        setShowTerminal(true);
+                      }
+                    }}
+                    disabled={!nodeId}
+                    className="flex items-center justify-between p-3 rounded-lg border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] transition-all group disabled:opacity-40"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className={`w-2.5 h-2.5 rounded-full ${
+                        c.state?.includes('Running') ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'
+                      }`} />
+                      <div className="text-left">
+                        <p className="text-xs font-medium text-white/70">Replica .{c.slot}</p>
+                        <p className="text-[10px] text-white/30 font-mono">{c.node}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-white/20">{c.state}</span>
+                      <Terminal className="w-3.5 h-3.5 text-white/20 group-hover:text-brand-400 transition-colors" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Active terminal */}
+          {showTerminal && selectedContainer && (
+            <DockerTerminal
+              containerId={selectedContainer.taskId}
+              serverId={selectedContainer.node}
+              onClose={() => {
+                setShowTerminal(false);
+                setSelectedContainer(null);
+              }}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
