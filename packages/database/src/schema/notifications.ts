@@ -59,6 +59,8 @@ export const auditLogs = pgTable('audit_logs', {
   action: varchar('action', { length: 100 }).notNull(),
   resourceType: varchar('resource_type', { length: 50 }).notNull(),
   resourceId: uuid('resource_id'),
+  resourceName: varchar('resource_name', { length: 255 }),
+  description: text('description'),
   metadata: jsonb('metadata').default({}),
   ipAddress: varchar('ip_address', { length: 45 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

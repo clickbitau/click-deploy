@@ -44,6 +44,7 @@ export const projects = pgTable('projects', {
 export const services = pgTable('services', {
   id: uuid('id').defaultRandom().primaryKey(),
   name: varchar('name', { length: 100 }).notNull(),
+  description: text('description'),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   type: serviceTypeEnum('type').notNull().default('application'),
   sourceType: sourceTypeEnum('source_type').notNull(),
@@ -56,6 +57,7 @@ export const services = pgTable('services', {
   // Dockerfile
   dockerfilePath: varchar('dockerfile_path', { length: 500 }).default('Dockerfile'),
   dockerContext: varchar('docker_context', { length: 500 }).default('.'),
+  dockerBuildStage: varchar('docker_build_stage', { length: 255 }),
 
   // Compose
   composeFile: text('compose_file'),
@@ -63,6 +65,14 @@ export const services = pgTable('services', {
   // Image source
   imageName: varchar('image_name', { length: 500 }),
   imageTag: varchar('image_tag', { length: 255 }).default('latest'),
+
+  // Container runtime overrides (like Dokploy)
+  command: text('command'),            // Custom entrypoint
+  args: jsonb('args').default([]),     // Custom CMD args
+
+  // Build config
+  buildArgs: jsonb('build_args').default({}),     // Build-time ARGs
+  buildSecrets: jsonb('build_secrets').default({}), // Build-time secrets
 
   // Node placement
   buildNodeId: uuid('build_node_id'),  // FK added in relations
@@ -80,6 +90,13 @@ export const services = pgTable('services', {
   resourceLimits: jsonb('resource_limits'),
   labels: jsonb('labels').default({}),
   autoDeploy: boolean('auto_deploy').notNull().default(true),
+
+  // Advanced Swarm config (matches Dokploy)
+  restartPolicy: jsonb('restart_policy'),       // { Condition, Delay, MaxAttempts, Window }
+  updateConfig: jsonb('update_config'),         // { Parallelism, Delay, FailureAction, Order }
+  rollbackConfig: jsonb('rollback_config'),     // Same shape as updateConfig
+  placementConstraints: jsonb('placement_constraints').default([]), // ["node.role==worker", etc.]
+  networks: jsonb('networks').default([]),      // Additional swarm networks
 
   // Docker Swarm reference
   webhookSecret: varchar('webhook_secret', { length: 255 }),
