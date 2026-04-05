@@ -205,6 +205,14 @@ export class SwarmManager {
     };
     networks?: string[];
     mounts?: Array<{ type: string; source: string; target: string; readonly?: boolean }>;
+    // Container runtime overrides (matches Dokploy)
+    command?: string;            // Custom entrypoint
+    args?: string[];             // Custom CMD args
+    stopGracePeriod?: string;    // e.g. '30s'
+    // Swarm config overrides
+    restartPolicy?: { condition?: string; delay?: string; maxAttempts?: number; window?: string };
+    updateConfig?: { parallelism?: number; delay?: string; failureAction?: string; monitor?: string; maxFailureRatio?: number; order?: string };
+    rollbackConfig?: { parallelism?: number; delay?: string; order?: string };
   }): Promise<string> {
     const args: string[] = ['docker', 'service', 'create', '--detach=true', '--no-resolve-image'];
 
@@ -214,18 +222,38 @@ export class SwarmManager {
     // Replicas
     args.push('--replicas', String(opts.replicas ?? 1));
 
-    // Zero-downtime update config
-    args.push('--update-order', DEFAULT_DEPLOY_CONFIG.updateOrder);
-    args.push('--update-failure-action', DEFAULT_DEPLOY_CONFIG.updateFailureAction);
-    args.push('--update-monitor', DEFAULT_DEPLOY_CONFIG.updateMonitor);
-    args.push('--update-parallelism', String(DEFAULT_DEPLOY_CONFIG.updateParallelism));
-    args.push('--update-delay', DEFAULT_DEPLOY_CONFIG.updateDelay);
-    args.push('--update-max-failure-ratio', String(DEFAULT_DEPLOY_CONFIG.updateMaxFailureRatio));
+    // Update config (user overrides or defaults)
+    const uc = opts.updateConfig || {};
+    args.push('--update-order', uc.order || DEFAULT_DEPLOY_CONFIG.updateOrder);
+    args.push('--update-failure-action', uc.failureAction || DEFAULT_DEPLOY_CONFIG.updateFailureAction);
+    args.push('--update-monitor', uc.monitor || DEFAULT_DEPLOY_CONFIG.updateMonitor);
+    args.push('--update-parallelism', String(uc.parallelism ?? DEFAULT_DEPLOY_CONFIG.updateParallelism));
+    args.push('--update-delay', uc.delay || DEFAULT_DEPLOY_CONFIG.updateDelay);
+    args.push('--update-max-failure-ratio', String(uc.maxFailureRatio ?? DEFAULT_DEPLOY_CONFIG.updateMaxFailureRatio));
 
-    // Rollback config
-    args.push('--rollback-parallelism', String(DEFAULT_DEPLOY_CONFIG.rollbackParallelism));
-    args.push('--rollback-delay', DEFAULT_DEPLOY_CONFIG.rollbackDelay);
-    args.push('--rollback-order', DEFAULT_DEPLOY_CONFIG.rollbackOrder);
+    // Rollback config (user overrides or defaults)
+    const rc = opts.rollbackConfig || {};
+    args.push('--rollback-parallelism', String(rc.parallelism ?? DEFAULT_DEPLOY_CONFIG.rollbackParallelism));
+    args.push('--rollback-delay', rc.delay || DEFAULT_DEPLOY_CONFIG.rollbackDelay);
+    args.push('--rollback-order', rc.order || DEFAULT_DEPLOY_CONFIG.rollbackOrder);
+
+    // Restart policy
+    if (opts.restartPolicy) {
+      if (opts.restartPolicy.condition) args.push('--restart-condition', opts.restartPolicy.condition);
+      if (opts.restartPolicy.delay) args.push('--restart-delay', opts.restartPolicy.delay);
+      if (opts.restartPolicy.maxAttempts) args.push('--restart-max-attempts', String(opts.restartPolicy.maxAttempts));
+      if (opts.restartPolicy.window) args.push('--restart-window', opts.restartPolicy.window);
+    }
+
+    // Stop grace period
+    if (opts.stopGracePeriod) {
+      args.push('--stop-grace-period', opts.stopGracePeriod);
+    }
+
+    // Container entrypoint/args override
+    if (opts.command) {
+      args.push('--entrypoint', escapeBash(opts.command));
+    }
 
     // Ports
     if (opts.ports) {
@@ -288,8 +316,15 @@ export class SwarmManager {
       }
     }
 
-    // Image (must be last)
+    // Image (must be last positional arg)
     args.push(opts.image);
+
+    // CMD args come after the image
+    if (opts.args && opts.args.length > 0) {
+      for (const arg of opts.args) {
+        args.push(escapeBash(arg));
+      }
+    }
 
     const result = await sshManager.exec(this.sshConfig, args.join(' '));
     if (result.code !== 0) {
@@ -322,16 +357,42 @@ export class SwarmManager {
       constraints?: string[];
       force?: boolean;
       mounts?: Array<{ type: string; source: string; target: string; readonly?: boolean }>;
+      // Container runtime overrides
+      command?: string;
+      args?: string[];
+      // Swarm config overrides
+      restartPolicy?: { condition?: string; delay?: string; maxAttempts?: number; window?: string };
+      updateConfig?: { parallelism?: number; delay?: string; failureAction?: string; monitor?: string; order?: string };
+      rollbackConfig?: { parallelism?: number; delay?: string; order?: string };
     }
   ): Promise<void> {
     const args: string[] = ['docker', 'service', 'update', '--detach=true', '--no-resolve-image'];
 
     args.push('--image', image);
 
-    // Always enforce our update strategy
-    args.push('--update-order', DEFAULT_DEPLOY_CONFIG.updateOrder);
-    args.push('--update-failure-action', DEFAULT_DEPLOY_CONFIG.updateFailureAction);
-    args.push('--update-monitor', DEFAULT_DEPLOY_CONFIG.updateMonitor);
+    // Update strategy (user overrides or defaults)
+    const uc = opts?.updateConfig || {};
+    args.push('--update-order', uc.order || DEFAULT_DEPLOY_CONFIG.updateOrder);
+    args.push('--update-failure-action', uc.failureAction || DEFAULT_DEPLOY_CONFIG.updateFailureAction);
+    args.push('--update-monitor', uc.monitor || DEFAULT_DEPLOY_CONFIG.updateMonitor);
+
+    // Entrypoint override
+    if (opts?.command) {
+      args.push('--entrypoint', escapeBash(opts.command));
+    }
+
+    // Args override
+    if (opts?.args && opts.args.length > 0) {
+      args.push('--args', opts.args.map(a => escapeBash(a)).join(','));
+    }
+
+    // Restart policy
+    if (opts?.restartPolicy) {
+      if (opts.restartPolicy.condition) args.push('--restart-condition', opts.restartPolicy.condition);
+      if (opts.restartPolicy.delay) args.push('--restart-delay', opts.restartPolicy.delay);
+      if (opts.restartPolicy.maxAttempts) args.push('--restart-max-attempts', String(opts.restartPolicy.maxAttempts));
+      if (opts.restartPolicy.window) args.push('--restart-window', opts.restartPolicy.window);
+    }
 
     if (opts?.envVars) {
       for (const [key, value] of Object.entries(opts?.envVars)) {

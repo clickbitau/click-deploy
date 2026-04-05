@@ -96,6 +96,7 @@ async function autoRegisterGithubWebhook(
 
 const serviceInput = z.object({
   name: z.string().min(1).max(100),
+  description: z.string().optional(),
   projectId: z.string().uuid(),
   type: z.enum(['application', 'database', 'compose', 'redis', 'postgres', 'mysql', 'mongo', 'mariadb']).default('application'),
   sourceType: z.enum(['git', 'image', 'compose']),
@@ -108,10 +109,19 @@ const serviceInput = z.object({
   // Dockerfile
   dockerfilePath: z.string().max(500).default('Dockerfile'),
   dockerContext: z.string().max(500).default('.'),
+  dockerBuildStage: z.string().max(255).optional(),
 
   // Image source
   imageName: z.string().max(500).optional(),
   imageTag: z.string().max(255).default('latest'),
+
+  // Container runtime overrides (matches Dokploy)
+  command: z.string().optional(),                       // Custom entrypoint
+  args: z.array(z.string()).default([]),                // Custom CMD args
+
+  // Build config
+  buildArgs: z.record(z.string()).default({}),          // Build-time ARGs
+  buildSecrets: z.record(z.string()).default({}),       // Build-time secrets
 
   // Compose
   composeFile: z.string().optional(),
@@ -151,6 +161,29 @@ const serviceInput = z.object({
   }).optional(),
   labels: z.record(z.string()).default({}),
   autoDeploy: z.boolean().default(true),
+
+  // Advanced Swarm config (matches Dokploy)
+  restartPolicy: z.object({
+    condition: z.enum(['none', 'on-failure', 'any']).optional(),
+    delay: z.string().optional(),
+    maxAttempts: z.number().int().optional(),
+    window: z.string().optional(),
+  }).optional(),
+  updateConfig: z.object({
+    parallelism: z.number().int().optional(),
+    delay: z.string().optional(),
+    failureAction: z.enum(['pause', 'continue', 'rollback']).optional(),
+    monitor: z.string().optional(),
+    maxFailureRatio: z.number().optional(),
+    order: z.enum(['stop-first', 'start-first']).optional(),
+  }).optional(),
+  rollbackConfig: z.object({
+    parallelism: z.number().int().optional(),
+    delay: z.string().optional(),
+    order: z.enum(['stop-first', 'start-first']).optional(),
+  }).optional(),
+  placementConstraints: z.array(z.string()).default([]),
+  networks: z.array(z.string()).default([]),
 });
 
 export const serviceRouter = createRouter({
