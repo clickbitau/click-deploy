@@ -64,7 +64,7 @@ export default function ServiceDetailPage() {
       retry: 1,
       enabled: !!serviceId,
       // Fallback polling only during active deployments; Realtime handles instant updates
-      refetchInterval: hasActiveDeployment ? 5000 : false,
+      refetchInterval: hasActiveDeployment ? 3000 : false,
     }
   );
   const { data: domains, refetch: refetchDomains } = trpc.domain.listByService.useQuery(
@@ -1076,12 +1076,12 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
 
   const { data: containers } = trpc.service.getContainers.useQuery(
     { serviceId },
-    { refetchInterval: autoRefresh ? 5000 : false }
+    { refetchInterval: autoRefresh ? 2000 : false }
   );
 
   const { data, isLoading, isError, error, refetch } = trpc.service.getLogs.useQuery(
     { serviceId, tail, taskId: selectedTaskId || undefined },
-    { retry: 1, refetchInterval: autoRefresh ? 5000 : false }
+    { retry: 1, refetchInterval: autoRefresh ? 3000 : false }
   );
 
   useEffect(() => {

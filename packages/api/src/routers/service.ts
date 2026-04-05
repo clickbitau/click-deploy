@@ -14,6 +14,38 @@ function getSwarmServiceName(serviceName: string): string {
   return sanitizeDockerName(`cd-${serviceName}`);
 }
 
+/**
+ * Shared helper: resolve manager node SSH config for an organization.
+ * Eliminates the repeated ~15 lines in every service operation.
+ */
+async function getManagerSSH(db: any, organizationId: string) {
+  const { nodes: nodesTable } = await import('@click-deploy/database');
+  const { sshManager } = await import('@click-deploy/docker');
+  const { decryptPrivateKey } = await import('../crypto');
+
+  const managerNode = await db.query.nodes.findFirst({
+    where: and(
+      eq(nodesTable.organizationId, organizationId),
+      eq(nodesTable.role, 'manager'),
+      eq(nodesTable.status, 'online'),
+    ),
+    with: { sshKey: true },
+  });
+
+  if (!managerNode?.sshKey) {
+    throw new Error('No online manager node found');
+  }
+
+  const sshConfig = {
+    host: managerNode.tailscaleIp || managerNode.host,
+    port: managerNode.port,
+    username: managerNode.sshUser,
+    privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
+  };
+
+  return { sshConfig, sshManager, managerNode };
+}
+
 async function autoRegisterGithubWebhook(
   gitUrl: string, 
   webhookSecret: string, 
@@ -390,30 +422,7 @@ export const serviceRouter = createRouter({
         throw new Error('Service has no active deployment to restart');
       }
 
-      // Get manager node to execute swarm commands
-      const { sshKeys, nodes: nodesTable } = await import('@click-deploy/database');
-      const { sshManager } = await import('@click-deploy/docker');
-      const { decryptPrivateKey } = await import('../crypto');
-
-      const managerNode = await ctx.db.query.nodes.findFirst({
-        where: and(
-          eq(nodesTable.organizationId, ctx.session.organizationId),
-          eq(nodesTable.role, 'manager'),
-          eq(nodesTable.status, 'online'),
-        ),
-        with: { sshKey: true },
-      });
-
-      if (!managerNode?.sshKey) {
-        throw new Error('No online manager node found');
-      }
-
-      const sshConfig = {
-        host: managerNode.tailscaleIp || managerNode.host,
-        port: managerNode.port,
-        username: managerNode.sshUser,
-        privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
-      };
+      const { sshConfig, sshManager } = await getManagerSSH(ctx.db, ctx.session.organizationId);
 
       const { decryptEnvVars } = await import('../crypto');
       const envVars = decryptEnvVars(service.envVars);
@@ -450,17 +459,7 @@ export const serviceRouter = createRouter({
       }
       if (!service.swarmServiceId) throw new Error('No active deployment');
 
-      const { nodes: nodesTable } = await import('@click-deploy/database');
-      const { sshManager } = await import('@click-deploy/docker');
-      const { decryptPrivateKey } = await import('../crypto');
-
-      const managerNode = await ctx.db.query.nodes.findFirst({
-        where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
-        with: { sshKey: true },
-      });
-      if (!managerNode?.sshKey) throw new Error('No online manager node');
-
-      const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const { sshConfig, sshManager } = await getManagerSSH(ctx.db, ctx.session.organizationId);
       const serviceName = getSwarmServiceName(service.name);
 
       const result = await sshManager.exec(sshConfig, `docker service scale ${serviceName}=0`);
@@ -483,17 +482,7 @@ export const serviceRouter = createRouter({
       }
       if (!service.swarmServiceId) throw new Error('No active deployment');
 
-      const { nodes: nodesTable } = await import('@click-deploy/database');
-      const { sshManager } = await import('@click-deploy/docker');
-      const { decryptPrivateKey } = await import('../crypto');
-
-      const managerNode = await ctx.db.query.nodes.findFirst({
-        where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
-        with: { sshKey: true },
-      });
-      if (!managerNode?.sshKey) throw new Error('No online manager node');
-
-      const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const { sshConfig, sshManager } = await getManagerSSH(ctx.db, ctx.session.organizationId);
       const serviceName = getSwarmServiceName(service.name);
       const replicas = service.replicas || 1;
 
@@ -567,19 +556,8 @@ export const serviceRouter = createRouter({
       }
       if (!service.swarmServiceId) return [];
 
-      const { nodes: nodesTable } = await import('@click-deploy/database');
-      const { sshManager } = await import('@click-deploy/docker');
-      const { decryptPrivateKey } = await import('../crypto');
-
-      const managerNode = await ctx.db.query.nodes.findFirst({
-        where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
-        with: { sshKey: true },
-      });
-      if (!managerNode?.sshKey) throw new Error('No manager node available');
-
-      const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
-
       try {
+        const { sshConfig, sshManager } = await getManagerSSH(ctx.db, ctx.session.organizationId);
         const result = await sshManager.exec(sshConfig, `docker service ps ${service.swarmServiceId} --filter desired-state=running --format "{{.ID}}|{{.Name}}|{{.Node}}|{{.CurrentState}}" --no-trunc`);
         const lines = (result.stdout || '').trim().split('\n').filter(Boolean);
         
@@ -613,17 +591,7 @@ export const serviceRouter = createRouter({
       }
       if (!service.swarmServiceId) return { logs: ['No active deployment — no logs available.'] };
 
-      const { nodes: nodesTable } = await import('@click-deploy/database');
-      const { sshManager } = await import('@click-deploy/docker');
-      const { decryptPrivateKey } = await import('../crypto');
-
-      const managerNode = await ctx.db.query.nodes.findFirst({
-        where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
-        with: { sshKey: true },
-      });
-      if (!managerNode?.sshKey) throw new Error('No manager node available');
-
-      const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+      const { sshConfig, sshManager } = await getManagerSSH(ctx.db, ctx.session.organizationId);
       const serviceName = getSwarmServiceName(service.name);
       
       const tail = Math.max(10, Math.min(1000, input.tail)); // clamp to safe range
@@ -676,29 +644,8 @@ export const serviceRouter = createRouter({
       }
 
       // Ensure we query the active node
-      const { nodes: nodesTable } = await import('@click-deploy/database');
-      const { sshManager } = await import('@click-deploy/docker');
-      const { decryptPrivateKey } = await import('../crypto');
-
-      const managerNode = await ctx.db.query.nodes.findFirst({
-        where: and(
-          eq(nodesTable.organizationId, ctx.session.organizationId),
-          eq(nodesTable.role, 'manager'),
-          eq(nodesTable.status, 'online')
-        ),
-        with: { sshKey: true },
-      });
-
-      if (!managerNode?.sshKey) return { cpu_percent: 0, mem_usage: "0B" };
-
-      const sshConfig = {
-        host: managerNode.tailscaleIp || managerNode.host,
-        port: managerNode.port,
-        username: managerNode.sshUser,
-        privateKey: decryptPrivateKey(managerNode.sshKey.privateKey),
-      };
-
       try {
+        const { sshConfig, sshManager } = await getManagerSSH(ctx.db, ctx.session.organizationId);
         const serviceName = serviceRecord.name;
         // Run docker ps -q filter, then pipe to docker stats
         const statsCmd = await sshManager.exec(

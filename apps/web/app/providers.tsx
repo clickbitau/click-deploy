@@ -22,9 +22,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 0, // Always refetch — no stale data
-            refetchOnMount: true,
+            // Cache responses for 30s — data appears instantly on navigation
+            // without showing loading spinners. Still refetches in background.
+            staleTime: 30_000,
+            gcTime: 5 * 60_000, // Keep unused cache for 5 min
+            refetchOnMount: 'always',
             refetchOnWindowFocus: true,
+            retry: 1,
           },
         },
       })
