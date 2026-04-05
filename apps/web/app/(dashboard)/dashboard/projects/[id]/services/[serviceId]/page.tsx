@@ -775,6 +775,13 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
   const [buildNodeId, setBuildNodeId] = useState(service.buildNodeId || '');
   const [replicasPerNode, setReplicasPerNode] = useState(getInitialReplicasPerNode());
   const [deployNodeIds, setDeployNodeIds] = useState<string[]>(getInitialDeployNodeIds());
+  
+  // Advanced overrides
+  const [command, setCommand] = useState(service.command || '');
+  const [argsStr, setArgsStr] = useState((service.args || []).join(' '));
+  const [buildArgsStr, setBuildArgsStr] = useState(Object.entries(service.buildArgs || {}).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const [restartCondition, setRestartCondition] = useState(service.restartPolicy?.condition || 'any');
+
   const [settingsSaved, setSettingsSaved] = useState(false);
 
   // Re-sync local state when the service data changes (e.g., after refetch)
@@ -785,6 +792,10 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
     setDockerfilePath(service.dockerfilePath || '');
     setDockerContext(service.dockerContext || '.');
     setBuildNodeId(service.buildNodeId || '');
+    setCommand(service.command || '');
+    setArgsStr((service.args || []).join(' '));
+    setBuildArgsStr(Object.entries(service.buildArgs || {}).map(([k, v]) => `${k}=${v}`).join('\n'));
+    setRestartCondition(service.restartPolicy?.condition || 'any');
     const ids = (service.deployNodeIds as string[]) || [];
     setDeployNodeIds(ids);
     setReplicasPerNode(
@@ -807,6 +818,19 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
   };
 
   const handleSave = () => {
+    const parseKV = (str: string) => {
+      const rec: Record<string, string> = {};
+      str.split('\n').forEach(line => {
+        const idx = line.indexOf('=');
+        if (idx > 0) {
+          const k = line.slice(0, idx).trim();
+          const v = line.slice(idx + 1).trim();
+          if (k) rec[k] = v;
+        }
+      });
+      return rec;
+    };
+
     updateService.mutate({
       id: service.id,
       replicas: totalReplicas,
@@ -819,6 +843,12 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
       buildNodeId: buildNodeId || undefined,
       deployNodeIds,
       targetNodeId: deployNodeIds[0] || undefined,
+      command: command || undefined,
+      args: argsStr ? argsStr.split(' ') : [],
+      buildArgs: parseKV(buildArgsStr),
+      restartPolicy: {
+        condition: restartCondition as any,
+      },
     }, {
       onSuccess: () => {
         setSettingsSaved(true);
@@ -917,11 +947,38 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
         <FormField label="Docker Context">
           <FormInput value={dockerContext} onChange={(e) => setDockerContext(e.target.value)} />
         </FormField>
-        <label className="flex items-center gap-2 cursor-pointer">
+        <label className="flex items-center gap-2 cursor-pointer mb-4">
           <input type="checkbox" checked={autoDeploy} onChange={(e) => setAutoDeploy(e.target.checked)}
             className="w-4 h-4 rounded border-white/10 bg-black/40 text-brand-500" />
           <span className="text-xs text-white/50">Auto-deploy on push</span>
         </label>
+
+        <div className="pt-4 border-t border-white/10 space-y-4">
+          <h4 className="text-xs font-semibold text-white/60 uppercase tracking-wider">Advanced Container & Build Overrides</h4>
+          <div className="grid grid-cols-2 gap-4">
+            <FormField label="Custom Command">
+              <FormInput value={command} onChange={(e) => setCommand(e.target.value)} placeholder="e.g. node" />
+            </FormField>
+            <FormField label="Custom Args">
+              <FormInput value={argsStr} onChange={(e) => setArgsStr(e.target.value)} placeholder="e.g. server.js --port 80" />
+            </FormField>
+          </div>
+          <FormField label="Build Arguments" hint="One KEY=value per line">
+            <textarea
+              value={buildArgsStr}
+              onChange={(e) => setBuildArgsStr(e.target.value)}
+              placeholder="NPM_TOKEN=123..."
+              className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white/80 focus:outline-none focus:border-brand-500/50 min-h-[60px]"
+            />
+          </FormField>
+          <FormField label="Restart Policy">
+            <FormSelect value={restartCondition} onChange={(e) => setRestartCondition(e.target.value)}>
+              <option value="any">Any (Always restart)</option>
+              <option value="on-failure">On Failure</option>
+              <option value="none">None (Do not restart)</option>
+            </FormSelect>
+          </FormField>
+        </div>
 
         {updateService.isError && (
           <div className="text-xs px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-2 animate-fade-in mb-2">
