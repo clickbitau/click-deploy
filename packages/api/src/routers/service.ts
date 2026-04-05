@@ -7,9 +7,59 @@ import { services, projects, nodes } from '@click-deploy/database';
 import { createRouter, protectedProcedure } from '../trpc';
 import { sanitizeDockerName, sanitizeEnvPair } from '../shell';
 
+import { randomBytes } from 'crypto';
+
 /** Consistent service naming — MUST match engine.ts getSwarmServiceName */
 function getSwarmServiceName(serviceName: string): string {
   return sanitizeDockerName(`cd-${serviceName}`);
+}
+
+async function autoRegisterGithubWebhook(
+  gitUrl: string, 
+  webhookSecret: string, 
+  userId: string, 
+  ctx: any
+) {
+  try {
+    const { accounts } = await import('@click-deploy/database');
+    const account = await ctx.db.query.accounts.findFirst({
+      where: and(eq(accounts.userId, userId), eq(accounts.providerId, 'github')),
+    });
+    if (!account?.accessToken) return;
+
+    const match = gitUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/i);
+    if (!match) return;
+    const owner = match[1];
+    const repo = match[2]?.replace('.git', '');
+
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/hooks`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'web',
+        active: true,
+        events: ['push'],
+        config: {
+          url: 'https://deploy.clickbit.com.au/api/webhooks/github',
+          content_type: 'json',
+          secret: webhookSecret,
+          insecure_ssl: '0',
+        }
+      })
+    });
+    
+    if (!res.ok) {
+      console.warn(`[webhook] Failed to auto-register webhook for ${owner}/${repo}: ${res.status}`);
+    } else {
+      console.log(`[webhook] Successfully registered webhook for ${owner}/${repo}`);
+    }
+  } catch (err) {
+    console.error(`[webhook] Exception auto-registering webhook:`, err);
+  }
 }
 
 const serviceInput = z.object({
@@ -176,6 +226,8 @@ export const serviceRouter = createRouter({
       const { encryptEnvVars } = await import('../crypto');
       const envVars = encryptEnvVars(dbInput.envVars);
 
+      const webhookSecret = randomBytes(32).toString('hex');
+
       const [service] = await ctx.db
         .insert(services)
         .values({
@@ -185,8 +237,13 @@ export const serviceRouter = createRouter({
           targetNodeId,
           deployNodeIds,
           replicas,
+          webhookSecret,
         })
         .returning();
+
+      if (service.gitUrl && service.autoDeploy) {
+        await autoRegisterGithubWebhook(service.gitUrl, webhookSecret, ctx.session.userId, ctx);
+      }
 
       return service;
     }),
@@ -224,6 +281,17 @@ export const serviceRouter = createRouter({
         .set(updateData)
         .where(eq(services.id, id))
         .returning();
+
+      if (updated.gitUrl && updated.autoDeploy && updated.webhookSecret) {
+        // Safe to call if the URL changed; hook handles 422 if exists, or registers if missing
+        await autoRegisterGithubWebhook(updated.gitUrl, updated.webhookSecret, ctx.session.userId, ctx);
+      } else if (updated.gitUrl && updated.autoDeploy && !updated.webhookSecret) {
+        // Backfill webhook secret for existing services
+        const newSecret = randomBytes(32).toString('hex');
+        const [backfilled] = await ctx.db.update(services).set({ webhookSecret: newSecret }).where(eq(services.id, id)).returning();
+        await autoRegisterGithubWebhook(backfilled.gitUrl!, newSecret, ctx.session.userId, ctx);
+        return backfilled;
+      }
 
       return updated;
     }),

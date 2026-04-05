@@ -82,6 +82,7 @@ export const services = pgTable('services', {
   autoDeploy: boolean('auto_deploy').notNull().default(true),
 
   // Docker Swarm reference
+  webhookSecret: varchar('webhook_secret', { length: 255 }),
   swarmServiceId: varchar('swarm_service_id', { length: 100 }),
 
   // Status
