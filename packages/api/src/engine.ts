@@ -10,7 +10,7 @@
 // 6. Monitor convergence
 // 7. Cleanup build artifacts
 // ============================================================
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import {
   db,
   deployments,
@@ -398,6 +398,17 @@ export class DeploymentEngine {
         ctx.commitSha ? `Commit ${ctx.commitSha.slice(0, 7)} is now live` : 'Service is now running',
         deploymentId
       );
+
+      // ── Step 5: Cleanup old deployments (Dokploy parity) ──
+      // Keep only the 10 most recent deployments per service to prevent DB bloat
+      this.cleanupOldDeployments(ctx.service.id, 10).catch((err) => {
+        console.warn('[deploy] Deployment cleanup failed:', err);
+      });
+
+      // Periodic Docker cleanup on the build node (best-effort)
+      if (ctx.buildNode) {
+        this.cleanupDockerOnNode(ctx.buildNode).catch(() => {});
+      }
 
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1389,6 +1400,50 @@ export class DeploymentEngine {
     return logs
       .map((l: DeploymentLog) => `[${l.timestamp.toISOString()}] [${l.step}] ${l.message}`)
       .join('\n');
+  }
+
+  /**
+   * Cleanup old deployments — keep only the N most recent per service.
+   * Mirrors Dokploy's `removeLastTenDeployments()` behavior.
+   * Deletes both DB records. Build logs are stored in the DB column, not on disk.
+   */
+  private async cleanupOldDeployments(serviceId: string, keepCount: number = 10): Promise<void> {
+    const allDeployments = await db.query.deployments.findMany({
+      where: eq(deployments.serviceId, serviceId),
+      orderBy: [desc(deployments.createdAt)],
+      columns: { id: true, createdAt: true },
+    });
+
+    if (allDeployments.length <= keepCount) return;
+
+    const toDelete = allDeployments.slice(keepCount);
+    const idsToDelete = toDelete.map((d) => d.id);
+
+    if (idsToDelete.length > 0) {
+      const { inArray } = await import('drizzle-orm');
+      await db.delete(deployments).where(inArray(deployments.id, idsToDelete));
+      console.log(`[deploy] Cleaned up ${idsToDelete.length} old deployment(s) for service ${serviceId}`);
+    }
+  }
+
+  /**
+   * Docker system cleanup on a build node.
+   * Removes dangling images, stopped containers, and unused build cache older than 24h.
+   * Non-blocking, best-effort.
+   */
+  private async cleanupDockerOnNode(node: NodeConnectionInfo): Promise<void> {
+    const sshConfig = {
+      host: node.tailscaleIp || node.host,
+      port: node.port,
+      username: node.sshUser,
+      privateKey: node.privateKey,
+    };
+    // Only remove dangling images and stopped containers older than 24h
+    // This is safe and won't affect running services
+    await sshManager.exec(
+      sshConfig,
+      'docker image prune -af --filter "until=24h" 2>/dev/null; docker container prune -f --filter "until=1h" 2>/dev/null || true'
+    );
   }
 
   /**

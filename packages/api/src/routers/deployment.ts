@@ -336,4 +336,88 @@ export const deploymentRouter = createRouter({
 
       return rollbackDeploy;
     }),
+
+  /** Cleanup old deployments for a service — keep only the N most recent */
+  cleanup: adminProcedure
+    .input(z.object({
+      serviceId: z.string().uuid(),
+      keepCount: z.number().int().min(1).max(100).default(10),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const service = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.serviceId),
+        with: { project: true },
+      });
+      if (!service || service.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+
+      const allDeploys = await ctx.db.query.deployments.findMany({
+        where: eq(deployments.serviceId, input.serviceId),
+        orderBy: [desc(deployments.createdAt)],
+        columns: { id: true },
+      });
+
+      if (allDeploys.length <= input.keepCount) {
+        return { deleted: 0, remaining: allDeploys.length };
+      }
+
+      const toDelete = allDeploys.slice(input.keepCount);
+      const idsToDelete = toDelete.map((d) => d.id);
+
+      await ctx.db.delete(deployments).where(inArray(deployments.id, idsToDelete));
+
+      audit(ctx.db, ctx, {
+        action: 'deployment.cleanup',
+        resourceType: 'service',
+        resourceId: input.serviceId,
+        resourceName: service.name,
+        description: `Cleaned up ${idsToDelete.length} old deployments (keeping ${input.keepCount})`,
+      });
+
+      return { deleted: idsToDelete.length, remaining: input.keepCount };
+    }),
+
+  /** Docker system prune on a specific node */
+  dockerPrune: adminProcedure
+    .input(z.object({ nodeId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const node = await ctx.db.query.nodes.findFirst({
+        where: and(
+          eq(nodes.id, input.nodeId),
+          eq(nodes.organizationId, ctx.session.organizationId),
+        ),
+        with: { sshKey: true },
+      });
+
+      if (!node?.sshKey) throw new Error('Node not found or no SSH key');
+
+      const { decryptPrivateKey } = await import('../crypto');
+      const { sshManager } = await import('@click-deploy/docker');
+
+      const sshConfig = {
+        host: node.tailscaleIp || node.host,
+        port: node.port,
+        username: node.sshUser,
+        privateKey: decryptPrivateKey(node.sshKey.privateKey),
+      };
+
+      const result = await sshManager.exec(
+        sshConfig,
+        'docker system prune -af --filter "until=24h" 2>&1'
+      );
+
+      audit(ctx.db, ctx, {
+        action: 'node.docker_prune',
+        resourceType: 'node',
+        resourceId: input.nodeId,
+        resourceName: node.name,
+        description: `Docker system prune on "${node.name}"`,
+      });
+
+      return {
+        success: result.code === 0,
+        output: result.stdout || result.stderr,
+      };
+    }),
 });
