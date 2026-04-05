@@ -506,8 +506,21 @@ export const infraRouter = createRouter({
 
         // Parse current version and digest
         // Format: image:tag@sha256:digest or image:tag
-        const currentTag = runningImage.split(':')[1]?.split('@')[0] || 'unknown';
+        let currentTag = runningImage.split(':')[1]?.split('@')[0] || 'unknown';
         const currentDigest = runningImage.includes('@') ? runningImage.split('@')[1] : '';
+
+        // If tag is 'latest', resolve actual version from OCI image labels
+        if (currentTag === 'latest') {
+          try {
+            const labelResult = await sshManager.exec(sshConfig,
+              `docker image inspect ${comp.image}:latest --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null`
+            );
+            const resolved = labelResult.stdout.trim();
+            if (resolved && resolved !== '<no value>') {
+              currentTag = resolved.startsWith('v') ? resolved : `v${resolved}`;
+            }
+          } catch { /* keep 'latest' */ }
+        }
 
         // Check Docker Hub for latest
         const latest = await getLatestDockerHubVersion(comp.image, comp.tagPattern);
