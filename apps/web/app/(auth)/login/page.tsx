@@ -106,11 +106,16 @@ export default function LoginPage() {
         GitHub
       </button>
 
-      <div className="mt-6 text-center">
+      <div className="mt-6 text-center space-y-2">
         <p className="text-xs text-white/40">
           Don't have an account?{' '}
           <Link href="/register" className="text-brand-400 hover:text-brand-300 transition-colors">
             Sign up
+          </Link>
+        </p>
+        <p className="text-xs">
+          <Link href="/forgot-password" className="text-white/30 hover:text-white/50 transition-colors">
+            Forgot your password?
           </Link>
         </p>
       </div>

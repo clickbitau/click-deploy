@@ -19,9 +19,10 @@ export const signIn = {
     return { error: null, data };
   },
   social: async ({ provider, callbackURL }: { provider: 'github'; callbackURL?: string }) => {
+    const finalDest = callbackURL || '/dashboard';
     const { data, error } = await getClient().auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${window.location.origin}${callbackURL || '/dashboard'}` },
+      options: { redirectTo: `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(finalDest)}` },
     });
     if (error) throw error;
     return data;
