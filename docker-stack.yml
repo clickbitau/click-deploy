@@ -59,11 +59,12 @@ services:
     networks:
       - click-deploy-net
     ports:
-      # Expose on the overlay so Traefik/Cloudflare Tunnel can reach the VIP
+      # Host mode: binds port directly on each node where a replica runs.
+      # This ensures cloudflared on the manager can reach localhost:3000.
       - target: 3000
         published: 3000
         protocol: tcp
-        mode: ingress
+        mode: host
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       DATABASE_URL: ${DATABASE_URL}
@@ -79,17 +80,17 @@ services:
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       NODE_ENV: production
     deploy:
-      replicas: 2
+      replicas: 3
       update_config:
         parallelism: 1
         delay: 15s
-        # Start new replica BEFORE stopping old one — zero-downtime
-        order: start-first
+        # Host mode: must stop old replica first to free port 3000
+        order: stop-first
         failure_action: rollback
       rollback_config:
         parallelism: 1
         delay: 10s
-        order: start-first
+        order: stop-first
       restart_policy:
         condition: on-failure
         delay: 10s

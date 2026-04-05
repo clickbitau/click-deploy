@@ -46,7 +46,9 @@ COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 COPY --from=deps /app/packages/api/node_modules ./packages/api/node_modules
 COPY --from=deps /app/packages/database/node_modules ./packages/database/node_modules
 COPY --from=deps /app/packages/docker/node_modules ./packages/docker/node_modules
-COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
+# packages/shared has zero deps — node_modules may not exist
+RUN mkdir -p ./packages/shared/node_modules
+COPY --from=deps /app/packages/shared/node_module[s] ./packages/shared/node_modules/
 
 # Copy all source
 COPY . .
@@ -58,6 +60,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Capture commit SHA for version display
 ARG GIT_COMMIT_SHA=unknown
 ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
+
+# Next.js 16 requires .env to exist at build time (stats the file).
+# .dockerignore excludes .env* — create empty placeholders for build.
+# Runtime env vars are injected via Swarm/Compose at container start.
+RUN rm -f /app/apps/web/.env 2>/dev/null; touch /app/.env /app/apps/web/.env
 
 # Build the monorepo with turbo cache mount for incremental rebuilds
 # NODE_ENV=production set AFTER build so devDeps are usable

@@ -140,7 +140,7 @@ export default function DashboardLayout({
             <NotificationBell />
           </div>
           <UserCard />
-          {/* HA-v2 */}
+          {/* auto-deploy-test-1712294100 */}
         </div>
       </aside>
 

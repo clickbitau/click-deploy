@@ -516,13 +516,13 @@ export const serviceRouter = createRouter({
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const serviceRecord = await ctx.db.query.services.findFirst({
-        where: and(
-          eq(services.id, input.id),
-          eq(services.organizationId, ctx.session.organizationId)
-        ),
+        where: eq(services.id, input.id),
+        with: { project: true },
       });
 
-      if (!serviceRecord) throw new Error('Service not found');
+      if (!serviceRecord || serviceRecord.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
 
       // Ensure we query the active node
       const { nodes: nodesTable } = await import('@click-deploy/database');
