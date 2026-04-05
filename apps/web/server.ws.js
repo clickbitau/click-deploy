@@ -172,13 +172,74 @@ function setupWebSockets(server) {
   console.log('   WebSocket: /ws/terminal, /ws/logs');
 }
 
+// ── MIME type fix for static assets ──────────────────────────
+// Next.js standalone has a bug where filenames with special chars
+// (like ~) get served with wrong Content-Type. We intercept
+// _next/static requests and serve them ourselves with correct types.
+const fs = require('node:fs');
+const MIME_TYPES = {
+  '.css': 'text/css; charset=UTF-8',
+  '.js': 'application/javascript; charset=UTF-8',
+  '.mjs': 'application/javascript; charset=UTF-8',
+  '.json': 'application/json; charset=UTF-8',
+  '.map': 'application/json; charset=UTF-8',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.eot': 'application/vnd.ms-fontobject',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.txt': 'text/plain; charset=UTF-8',
+  '.html': 'text/html; charset=UTF-8',
+  '.xml': 'application/xml; charset=UTF-8',
+  '.webmanifest': 'application/manifest+json',
+};
+
+function serveStaticWithCorrectMime(req, res) {
+  // Only intercept _next/static requests
+  const url = new URL(req.url || '', `http://${req.headers.host}`);
+  if (!url.pathname.startsWith('/_next/static/')) return false;
+
+  const ext = path.extname(url.pathname).toLowerCase();
+  const mime = MIME_TYPES[ext];
+  if (!mime) return false; // Unknown type — let Next.js handle it
+
+  // Resolve to the on-disk path
+  const filePath = path.join(appDir, '.next', 'static', url.pathname.replace('/_next/static/', ''));
+  
+  try {
+    if (!fs.existsSync(filePath)) return false; // 404 — let Next.js handle
+  } catch { return false; }
+
+  const stat = fs.statSync(filePath);
+  res.writeHead(200, {
+    'Content-Type': mime,
+    'Content-Length': stat.size,
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Last-Modified': stat.mtime.toUTCString(),
+  });
+  fs.createReadStream(filePath).pipe(res);
+  return true;
+}
+
 // ── Start ────────────────────────────────────────────────────
 async function main() {
   console.log('⚡ Click-Deploy starting with WebSocket support...');
 
   await app.prepare();
 
-  const server = http.createServer((req, res) => handle(req, res));
+  const server = http.createServer((req, res) => {
+    // Try serving static files with correct MIME types first
+    if (serveStaticWithCorrectMime(req, res)) return;
+    // Fall through to Next.js for everything else
+    handle(req, res);
+  });
   setupWebSockets(server);
 
   server.listen(PORT, HOSTNAME, () => {
