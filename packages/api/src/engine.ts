@@ -920,8 +920,10 @@ export class DeploymentEngine {
       const cmd = [
         buildDir.includes(':') ? `cd /d "${buildDir}" &&` : `cd ${buildDir} &&`,
         'DOCKER_BUILDKIT=1',
+        'BUILDX_NO_DEFAULT_ATTESTATIONS=1',
         'docker build',
         '--provenance=false',
+        '--output type=docker',
         `-t ${imageName}`,
         `-f ${dockerfile}`,
         ...cacheFlags,
@@ -967,7 +969,7 @@ export class DeploymentEngine {
         'nixpacks build',
         contextPath,
         `--name ${imageName}`,
-        '--docker-output type=docker',
+        '--docker-output type=docker,oci-mediatypes=false',
         ...envArgs,
       ].join(' ');
 
