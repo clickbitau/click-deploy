@@ -400,16 +400,27 @@ export const infraRouter = createRouter({
       const registry = new RegistryManager(manager);
       const tailscale = new TailscaleManager(manager);
 
-      const [traefikStatus, registryStatus, tailscaleStatus, nixpacksStatus] = await Promise.allSettled([
+      const sshConfig = { host: manager.host, port: manager.port, username: manager.sshUser, privateKey: manager.privateKey };
+
+      const [traefikStatus, registryStatus, tailscaleStatus, nixpacksStatus, proxyStatus] = await Promise.allSettled([
         traefik.getStatus(),
         registry.getStatus(),
         tailscale.getStatus(),
-        sshManager.exec({
-          host: manager.host,
-          port: manager.port,
-          username: manager.sshUser,
-          privateKey: manager.privateKey
-        }, 'nixpacks --version 2>/dev/null || echo "not installed"').then(r => r.stdout.trim())
+        sshManager.exec(sshConfig, 'nixpacks --version 2>/dev/null || echo "not installed"').then(r => r.stdout.trim()),
+        // Check the OpenResty S3 proxy — the critical XML-fixer that enables Supabase S3 storage
+        sshManager.exec(sshConfig,
+          `docker service ls --filter name=click-deploy-s3-proxy --format '{{.Name}}\t{{.Replicas}}\t{{.Image}}' 2>/dev/null`
+        ).then(r => {
+          const line = r.stdout.trim();
+          if (!line) return { running: false, replicas: '0/0', image: null };
+          const [, replicas, image] = line.split('\t');
+          const [running, desired] = (replicas || '0/0').split('/');
+          return {
+            running: parseInt(running || '0') > 0 && running === desired,
+            replicas: replicas || '0/0',
+            image: image || null,
+          };
+        })
       ]);
 
       // Log any failures for debugging
@@ -418,6 +429,9 @@ export const infraRouter = createRouter({
       }
       if (registryStatus.status === 'rejected') {
         console.error('[infra.status] Registry check failed:', registryStatus.reason);
+      }
+      if (proxyStatus.status === 'rejected') {
+        console.error('[infra.status] S3 proxy check failed:', proxyStatus.reason);
       }
 
       const regStatus = registryStatus.status === 'fulfilled'
@@ -447,6 +461,9 @@ export const infraRouter = createRouter({
           storageMode: regStatus.storageMode,
           mode: regStatus.mode,
         },
+        s3Proxy: proxyStatus.status === 'fulfilled'
+          ? proxyStatus.value
+          : { running: false, replicas: '0/0', image: null },
         tailscale: tailscaleStatus.status === 'fulfilled'
           ? tailscaleStatus.value
           : { installed: false, running: false, authenticated: false },
@@ -459,6 +476,7 @@ export const infraRouter = createRouter({
         managerNodes: [],
         traefik: { running: false },
         registry: { running: false, replicas: 0, storageMode: 'unknown' as const },
+        s3Proxy: { running: false, replicas: '0/0', image: null },
         tailscale: { installed: false, running: false, authenticated: false },
         nixpacks: 'unknown',
       };

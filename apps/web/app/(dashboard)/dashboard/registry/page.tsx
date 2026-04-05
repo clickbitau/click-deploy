@@ -5,14 +5,22 @@ import {
   Plus,
   Box,
   ShieldCheck,
-  MoreVertical,
   Trash2,
   Loader2,
   Save,
+  ChevronDown,
+  ChevronRight,
+  Tag,
+  Copy,
+  Check,
+  RefreshCw,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
 import { useConfirm } from '@/components/confirm-dialog';
+import { toast } from 'sonner';
 
 const typeBadge: Record<string, string> = {
   dockerhub: 'bg-brand-500/10 text-brand-400',
@@ -29,6 +37,264 @@ const typeLabels: Record<string, string> = {
   self_hosted: 'Self-Hosted',
   custom: 'Custom',
 };
+
+// ── Catalog Browser ──────────────────────────────────────────
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="ml-1 p-0.5 text-white/20 hover:text-white/60 transition-colors rounded"
+      title={`Copy: ${text}`}
+    >
+      {copied ? <Check className="w-2.5 h-2.5 text-success-400" /> : <Copy className="w-2.5 h-2.5" />}
+    </button>
+  );
+}
+
+function RegistryTagList({ registryId, repository }: { registryId: string; repository: string }) {
+  const { data, isLoading, isError } = trpc.registry.tags.useQuery(
+    { id: registryId, repository },
+    { retry: 1, staleTime: 30_000 }
+  );
+
+  if (isLoading) {
+    return (
+      <div className="mt-1 flex items-center gap-1.5 text-[10px] text-white/25 pl-3">
+        <Loader2 className="w-2.5 h-2.5 animate-spin" />
+        Loading tags...
+      </div>
+    );
+  }
+
+  if (isError || !data?.tags?.length) {
+    return (
+      <div className="mt-1 pl-3 text-[10px] text-white/20 italic">No tags found</div>
+    );
+  }
+
+  return (
+    <div className="mt-1.5 pl-3 flex flex-wrap gap-1.5">
+      {data.tags.map((tag: string) => (
+        <span
+          key={tag}
+          className="flex items-center gap-0.5 text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/[0.06] text-white/50 hover:text-white/80 transition-colors"
+        >
+          <Tag className="w-2 h-2 text-brand-400/60 shrink-0" />
+          {tag}
+          <CopyButton text={`${repository}:${tag}`} />
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function RegistryCatalog({ registryId }: { registryId: string }) {
+  const [expandedRepo, setExpandedRepo] = useState<string | null>(null);
+  const { data, isLoading, isError, refetch, isFetching } = trpc.registry.catalog.useQuery(
+    { id: registryId },
+    { retry: 1, staleTime: 30_000 }
+  );
+
+  if (isLoading) {
+    return (
+      <div className="px-4 pb-4 pt-1 flex items-center gap-2 text-[11px] text-white/30">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        Fetching catalog from registry...
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="px-4 pb-4 pt-1 text-[11px] text-danger-400/70">
+        Failed to fetch catalog. Ensure the manager node is online and the registry is reachable.
+      </div>
+    );
+  }
+
+  const repos: string[] = data?.repositories || [];
+
+  return (
+    <div className="px-4 pb-4 pt-2 border-t border-white/[0.06]">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-[10px] uppercase tracking-wider text-white/25 font-semibold">
+          Image Catalog
+          {repos.length > 0 && <span className="ml-1.5 text-white/40">({repos.length})</span>}
+        </p>
+        <button
+          onClick={(e) => { e.stopPropagation(); refetch(); }}
+          disabled={isFetching}
+          className="text-[10px] text-white/25 hover:text-white/60 flex items-center gap-1 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`w-2.5 h-2.5 ${isFetching ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </div>
+
+      {repos.length === 0 ? (
+        <p className="text-[10px] text-white/20 italic">No images found in registry</p>
+      ) : (
+        <div className="space-y-1">
+          {repos.map((repo) => (
+            <div key={repo}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpandedRepo(expandedRepo === repo ? null : repo);
+                }}
+                className="w-full flex items-center gap-2 text-left py-1 px-1 rounded hover:bg-white/[0.03] transition-colors group"
+              >
+                {expandedRepo === repo
+                  ? <ChevronDown className="w-3 h-3 text-white/30 shrink-0" />
+                  : <ChevronRight className="w-3 h-3 text-white/20 group-hover:text-white/40 shrink-0" />
+                }
+                <Box className="w-3 h-3 text-brand-400/60 shrink-0" />
+                <span className="text-[11px] font-mono text-white/60 group-hover:text-white/80 transition-colors truncate">
+                  {repo}
+                </span>
+                <CopyButton text={repo} />
+              </button>
+              {expandedRepo === repo && (
+                <RegistryTagList registryId={registryId} repository={repo} />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Registry Card ────────────────────────────────────────────
+
+function RegistryCard({ reg, onEdit, onDelete }: {
+  reg: any;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const testConnection = trpc.registry.testConnection.useMutation();
+
+  const handleTest = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTesting(true);
+    setTestResult(null);
+    testConnection.mutate({ id: reg.id }, {
+      onSuccess: (result) => {
+        setTesting(false);
+        setTestResult(result as any);
+        if ((result as any).success) toast.success(`Registry reachable: ${reg.name}`);
+        else toast.error(`Registry unreachable: ${(result as any).message}`);
+      },
+      onError: (err) => {
+        setTesting(false);
+        setTestResult({ success: false, message: err.message });
+        toast.error(`Test failed: ${err.message}`);
+      },
+    });
+  };
+
+  return (
+    <div className="glass-card glass-card-hover">
+      {/* Header row — click to expand catalog */}
+      <div
+        className="px-5 py-4 flex items-start justify-between cursor-pointer"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-500/20 to-brand-600/10 flex items-center justify-center border border-brand-500/10 mt-0.5">
+            <Box className="w-5 h-5 text-brand-400" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-white">{reg.name}</h3>
+              {reg.isDefault && (
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 uppercase tracking-wider">
+                  Default
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-white/30 mt-0.5 font-mono">{reg.url}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${typeBadge[reg.type] || typeBadge.custom}`}>
+            {typeLabels[reg.type] || reg.type}
+          </span>
+          {/* Test connection button */}
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-white/10 text-[10px] text-white/40 hover:text-white/70 hover:border-white/20 transition-colors disabled:opacity-50"
+            title="Test connectivity"
+          >
+            {testing
+              ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+              : testResult
+                ? testResult.success
+                  ? <Wifi className="w-2.5 h-2.5 text-success-400" />
+                  : <WifiOff className="w-2.5 h-2.5 text-danger-400" />
+                : <Wifi className="w-2.5 h-2.5" />
+            }
+            {testing ? 'Testing...' : 'Test'}
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onEdit(); }}
+            className="p-1 hover:bg-white/5 rounded text-white/20 hover:text-white/60 transition-colors"
+            title="Edit registry"
+          >
+            <Save className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="p-1 hover:bg-red-500/10 rounded text-white/20 hover:text-danger-400 transition-colors"
+            title="Delete registry"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+          {expanded
+            ? <ChevronDown className="w-3.5 h-3.5 text-white/30" />
+            : <ChevronRight className="w-3.5 h-3.5 text-white/20" />
+          }
+        </div>
+      </div>
+
+      {/* Auth + test result strip */}
+      <div className="px-5 pb-3 flex items-center gap-4 text-[10px] text-white/25">
+        <span className="flex items-center gap-1">
+          <ShieldCheck className="w-3 h-3" />
+          {reg.username && reg.username !== '***'
+            ? 'Authenticated'
+            : reg.username === '***'
+              ? 'Credentials set'
+              : 'No auth'}
+        </span>
+        {testResult && (
+          <span className={`flex items-center gap-1 ${testResult.success ? 'text-success-400' : 'text-danger-400'}`}>
+            {testResult.success ? '✓' : '✗'} {testResult.message}
+          </span>
+        )}
+      </div>
+
+      {/* Expandable catalog section */}
+      {expanded && <RegistryCatalog registryId={reg.id} />}
+    </div>
+  );
+}
+
+// ── Main Page ────────────────────────────────────────────────
 
 export default function RegistryPage() {
   const { data: registries, isLoading, refetch } = trpc.registry.list.useQuery(undefined, { retry: 1 });
@@ -47,8 +313,8 @@ export default function RegistryPage() {
     <div>
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">External Registries</h1>
-          <p className="text-sm text-white/40 mt-1">Remote credentials for Docker images & artifacts</p>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Registries</h1>
+          <p className="text-sm text-white/40 mt-1">Docker image registries — self-hosted &amp; external credentials</p>
         </div>
         <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2">
           <Plus className="w-4 h-4" />
@@ -69,9 +335,9 @@ export default function RegistryPage() {
           <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-5">
             <Box className="w-8 h-8 text-white/20" />
           </div>
-          <h3 className="text-sm font-semibold text-white/60 mb-1">No external registry credentials</h3>
+          <h3 className="text-sm font-semibold text-white/60 mb-1">No registries configured</h3>
           <p className="text-xs text-white/30 mb-6 max-w-sm text-center">
-            Link external platforms to allow deployment of third party images.
+            Add a self-hosted or external Docker registry to store and pull images.
           </p>
           <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2">
             <Plus className="w-4 h-4" />
@@ -81,45 +347,14 @@ export default function RegistryPage() {
       )}
 
       {!isLoading && registries && registries.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4">
           {registries.map((reg: any) => (
-            <div key={reg.id} className="glass-card glass-card-hover group cursor-pointer" onClick={() => setEditingReg(reg)}>
-              <div className="px-5 py-4 flex items-start justify-between">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-500/20 to-brand-600/10 flex items-center justify-center border border-brand-500/10 mt-0.5">
-                    <Box className="w-5 h-5 text-brand-400" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-semibold text-white">{reg.name}</h3>
-                      {reg.isDefault && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 uppercase tracking-wider">
-                          Default
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-white/30 mt-0.5 font-mono">{reg.url}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${typeBadge[reg.type] || typeBadge.custom}`}>
-                    {typeLabels[reg.type] || reg.type}
-                  </span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleDelete(reg.id); }}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-danger-400" />
-                  </button>
-                </div>
-              </div>
-              <div className="px-5 pb-4 flex items-center gap-4 text-[10px] text-white/25">
-                <span className="flex items-center gap-1">
-                  <ShieldCheck className="w-3 h-3" />
-                  {reg.username && reg.username !== '***' ? 'Authenticated' : reg.username === '***' ? 'Credentials set' : 'No auth'}
-                </span>
-              </div>
-            </div>
+            <RegistryCard
+              key={reg.id}
+              reg={reg}
+              onEdit={() => setEditingReg(reg)}
+              onDelete={() => handleDelete(reg.id)}
+            />
           ))}
         </div>
       )}
@@ -147,7 +382,7 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
 }) {
   const createReg = trpc.registry.create.useMutation();
   const [name, setName] = useState('');
-  const [type, setType] = useState<'dockerhub' | 'ghcr' | 'ecr' | 'self_hosted' | 'custom'>('dockerhub');
+  const [type, setType] = useState<'dockerhub' | 'ghcr' | 'ecr' | 'self_hosted' | 'custom'>('self_hosted');
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -155,7 +390,7 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
 
   const handleClose = () => {
     setName(''); setUrl(''); setUsername(''); setPassword('');
-    setType('dockerhub'); setIsDefault(true);
+    setType('self_hosted'); setIsDefault(true);
     onClose();
   };
 
@@ -183,11 +418,12 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
     <SlideOver open={open} onClose={handleClose} title="Add Registry" description="Configure a Docker image registry">
       <div className="space-y-5">
         <FormField label="Registry Name">
-          <FormInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Production Registry" autoFocus />
+          <FormInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Supabase S3 Registry" autoFocus />
         </FormField>
 
         <FormField label="Type">
           <FormSelect value={type} onChange={(e) => handleTypeChange(e.target.value)}>
+            <option value="self_hosted">Self-Hosted</option>
             <option value="dockerhub">Docker Hub</option>
             <option value="ghcr">GitHub Container Registry</option>
             <option value="ecr">Amazon ECR</option>
@@ -196,7 +432,7 @@ function AddRegistrySlideOver({ open, onClose, onSuccess }: {
         </FormField>
 
         <FormField label="Registry URL">
-          <FormInput value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://registry.example.com" />
+          <FormInput value={url} onChange={(e) => setUrl(e.target.value)} placeholder={type === 'self_hosted' ? '10.10.20.30:5000' : 'https://registry.example.com'} />
         </FormField>
 
         <div className="relative">
@@ -302,6 +538,7 @@ function EditRegistrySlideOver({ open, registry, onClose, onSuccess }: {
 
         <FormField label="Type">
           <FormSelect value={type} onChange={(e) => setType(e.target.value as any)}>
+            <option value="self_hosted">Self-Hosted</option>
             <option value="dockerhub">Docker Hub</option>
             <option value="ghcr">GitHub Container Registry</option>
             <option value="ecr">Amazon ECR</option>

@@ -461,7 +461,7 @@ function InfrastructureTab() {
             <span className="text-sm">Checking infrastructure...</span>
           </div>
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
             <StatusCard
               label="Manager Nodes"
               value={status?.managerNodes?.length ? status.managerNodes.map((m: any) => m.name).join(', ') : 'Not configured'}
@@ -481,6 +481,14 @@ function InfrastructureTab() {
               detail={status?.registry?.url}
               active={!!status?.registry?.running}
               updateBadge={updates?.registry?.updateAvailable ? `→ ${updates.registry.latestVersion}` : undefined}
+            />
+            <StatusCard
+              label="S3 Proxy"
+              value={(status as any)?.s3Proxy?.running ? 'Running' : 'Not deployed'}
+              detail={(status as any)?.s3Proxy?.running
+                ? `Replicas: ${(status as any).s3Proxy.replicas}`
+                : 'OpenResty XML-fixer for Supabase S3'}
+              active={!!(status as any)?.s3Proxy?.running}
             />
             <StatusCard
               label="Tailscale VPN"
