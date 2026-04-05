@@ -487,10 +487,54 @@ export const serviceRouter = createRouter({
 
       return { success: true, deploymentId: deployment!.id };
     }),
+  getContainers: protectedProcedure
+    .input(z.object({ serviceId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const service = await ctx.db.query.services.findFirst({
+        where: eq(services.id, input.serviceId),
+        with: { project: true },
+      });
+      if (!service || service.project.organizationId !== ctx.session.organizationId) {
+        throw new Error('Service not found');
+      }
+      if (!service.swarmServiceId) return [];
+
+      const { nodes: nodesTable } = await import('@click-deploy/database');
+      const { sshManager } = await import('@click-deploy/docker');
+      const { decryptPrivateKey } = await import('../crypto');
+
+      const managerNode = await ctx.db.query.nodes.findFirst({
+        where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
+        with: { sshKey: true },
+      });
+      if (!managerNode?.sshKey) throw new Error('No manager node available');
+
+      const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
+
+      try {
+        const result = await sshManager.exec(sshConfig, `docker service ps ${service.swarmServiceId} --filter desired-state=running --format "{{.ID}}|{{.Name}}|{{.Node}}|{{.CurrentState}}" --no-trunc`);
+        const lines = (result.stdout || '').trim().split('\n').filter(Boolean);
+        
+        return lines.map(line => {
+          const [taskId, name, node, state] = line.split('|');
+          const slotStr = name?.split('.')?.[1]; 
+          return {
+            taskId: taskId?.trim(),
+            slot: slotStr ? parseInt(slotStr, 10) : 0,
+            name: name?.trim(),
+            node: node?.trim(),
+            state: state?.trim()
+          };
+        });
+      } catch (err: any) {
+        console.error('Failed to fetch containers:', err);
+        return [];
+      }
+    }),
 
   /** Get live logs for a running service */
   getLogs: protectedProcedure
-    .input(z.object({ serviceId: z.string().uuid(), tail: z.number().default(100) }))
+    .input(z.object({ serviceId: z.string().uuid(), tail: z.number().default(100), taskId: z.string().optional() }))
     .query(async ({ ctx, input }) => {
       const service = await ctx.db.query.services.findFirst({
         where: eq(services.id, input.serviceId),
@@ -517,9 +561,34 @@ export const serviceRouter = createRouter({
       const tail = Math.max(10, Math.min(1000, input.tail)); // clamp to safe range
 
       try {
-        const result = await sshManager.exec(sshConfig, `docker service logs ${service.swarmServiceId} --tail ${tail} --timestamps 2>&1`);
-        const lines = (result.stdout || result.stderr || '').trim().split('\n').filter(Boolean);
-        return { logs: lines.length > 0 ? lines : ['No logs available or service starting up...'] };
+        const target = input.taskId || service.swarmServiceId;
+        const result = await sshManager.exec(sshConfig, `docker service logs ${target} --tail ${tail} --timestamps 2>&1`);
+        const rawLines = (result.stdout || result.stderr || '').trim().split('\n').filter(Boolean);
+        
+        const logs: { container: string, node: string, message: string, raw: string }[] = [];
+        for (const line of rawLines) {
+          const match = line.match(/^([^|]+)\|\s*(.*)$/);
+          if (match) {
+            const prefix = match[1]?.trim() || '';
+            const message = match[2] || '';
+            let slot = '?';
+            let node = '?';
+            
+            const atSplit = prefix.split('@');
+            if (atSplit.length === 2) {
+              node = atSplit[1]?.trim() || '?';
+              const dotSplit = atSplit[0]?.split('.');
+              if (dotSplit && dotSplit.length >= 2) {
+                slot = dotSplit[1] || '?';
+              }
+            }
+            logs.push({ container: slot, node: node, message, raw: line });
+          } else {
+            logs.push({ container: '?', node: '?', message: line, raw: line });
+          }
+        }
+        
+        return { logs: logs.length > 0 ? logs : [{ container: '?', node: '?', message: 'No logs available or service starting up...', raw: '' }] };
       } catch (err: any) {
         throw new Error(`Failed to fetch logs from manager node: ${err.message}`);
       }

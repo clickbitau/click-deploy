@@ -1005,10 +1005,16 @@ function DeployLogViewer({ deploy, isActive }: { deploy: any; isActive: boolean 
 function ServiceLogs({ serviceId }: { serviceId: string }) {
   const [tail, setTail] = useState(100);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
 
+  const { data: containers } = trpc.service.getContainers.useQuery(
+    { serviceId },
+    { refetchInterval: autoRefresh ? 5000 : false }
+  );
+
   const { data, isLoading, isError, error, refetch } = trpc.service.getLogs.useQuery(
-    { serviceId, tail },
+    { serviceId, tail, taskId: selectedTaskId || undefined },
     { retry: 1, refetchInterval: autoRefresh ? 5000 : false }
   );
 
@@ -1017,6 +1023,12 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
   }, [data?.logs]);
+
+  const getSlotColor = (slot: string | number) => {
+    const colors = ['text-blue-400', 'text-emerald-400', 'text-amber-400', 'text-purple-400', 'text-pink-400', 'text-cyan-400'];
+    const s = typeof slot === 'number' ? slot : parseInt(String(slot).replace(/\D/g, '') || '0', 10);
+    return colors[s % colors.length];
+  };
 
   return (
     <div className="glass-card p-6">
@@ -1032,7 +1044,7 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
           <select
             value={tail}
             onChange={(e) => setTail(Number(e.target.value))}
-            className="bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-white/60"
+            className="bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-white/60 focus:outline-none"
           >
             <option value={100}>Last 100</option>
             <option value={500}>Last 500</option>
@@ -1058,13 +1070,55 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <button
+          onClick={() => setSelectedTaskId(null)}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all border ${
+            selectedTaskId === null
+              ? 'bg-brand-500/15 border-brand-500/30 text-brand-400'
+              : 'bg-white/[0.02] border-white/[0.06] text-white/40 hover:bg-white/[0.04]'
+          }`}
+        >
+          All Replicas
+        </button>
+        {containers?.map((c) => {
+          const isSelected = selectedTaskId === c.taskId;
+          return (
+            <button
+              key={c.taskId}
+              onClick={() => setSelectedTaskId(c.taskId || null)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all border ${
+                isSelected
+                  ? 'bg-brand-500/15 border-brand-500/30 text-brand-400'
+                  : 'bg-white/[0.02] border-white/[0.06] text-white/50 hover:bg-white/[0.04]'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${c.state === 'Running' ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
+              Replica .{c.slot}
+              <span className="text-white/30 truncate max-w-[80px]">({c.node})</span>
+            </button>
+          );
+        })}
+      </div>
+
       <pre
         ref={logRef}
         className="bg-black/80 border border-white/10 rounded-lg p-4 text-[11px] text-white/60 font-mono max-h-[500px] overflow-auto whitespace-pre-wrap scroll-smooth leading-5"
       >
         {isLoading ? 'Loading logs...' : isError ? (
           <span className="text-danger-400">Error: {(error as any)?.message || 'No manager node available'}</span>
-        ) : (data?.logs?.join('\n') || 'No logs available')}
+        ) : (
+          data?.logs?.map((log: any, idx: number) => (
+            <div key={idx} className="break-all">
+              {log.container !== '?' && selectedTaskId === null && (
+                <span className={`mr-2 font-bold ${getSlotColor(log.container)}`}>
+                  [{log.container}@{log.node}]
+                </span>
+              )}
+              {log.message}
+            </div>
+          )) || 'No logs available'
+        )}
       </pre>
     </div>
   );
