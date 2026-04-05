@@ -172,7 +172,7 @@ export class TraefikManager {
       // Update existing Traefik service
       const updateCmd = [
         `docker service update`,
-        `--image traefik:v3.3`,
+        `--image traefik:latest`,
         `--force`,
         serviceName,
       ].join(' ');
@@ -210,7 +210,7 @@ export class TraefikManager {
       // Labels for Traefik's own dashboard (optional)
       `--label traefik.enable=false`,
       // Traefik image with CLI args
-      `traefik:v3.3`,
+      `traefik:latest`,
       // -- Traefik CLI arguments --
       `--api.dashboard=${dashboardEnabled}`,
       `--api.insecure=false`,
@@ -268,9 +268,26 @@ export class TraefikManager {
     }
 
     const parts = inspect.stdout.trim().split(' ');
+    let version = parts[0]?.replace('traefik:', '').replace(/@sha256:.+$/, '') || 'unknown';
+
+    // If tag is 'latest', query the actual version from the running container
+    if (version === 'latest' || version === 'unknown') {
+      try {
+        const versionCmd = await sshManager.exec(this.sshConfig,
+          `docker exec $(docker ps -q --filter "name=click-deploy-traefik" | head -1) traefik version 2>/dev/null | head -1 | awk '{print $2}'`
+        );
+        const actualVersion = versionCmd.stdout.trim();
+        if (actualVersion && actualVersion !== '') {
+          version = `v${actualVersion}`;
+        }
+      } catch {
+        // Fall back to 'latest' if we can't get the actual version
+      }
+    }
+
     return {
       running: true,
-      version: parts[0]?.replace('traefik:', '').replace(/@sha256:.+$/, '') || 'unknown',
+      version,
       replicas: parseInt(parts[1] || '0'),
       ports: ['80', '443'],
     };

@@ -46,8 +46,8 @@ const INFRA_COMPONENTS = {
   traefik: {
     image: 'traefik',
     serviceName: 'click-deploy-traefik',
-    tagPattern: /^v3\.\d+(\.\d+)?$/,   // v3.x or v3.x.y
-    fallbackTag: 'v3.3',
+    tagPattern: /^v?\d+\.\d+(\.\d+)?$/,  // v3.x.y or 3.x.y
+    fallbackTag: 'latest',
   },
   registry: {
     image: 'registry',
