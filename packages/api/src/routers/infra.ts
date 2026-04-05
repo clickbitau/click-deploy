@@ -58,6 +58,149 @@ const INFRA_COMPONENTS = {
 } as const;
 
 /**
+ * Generate the streaming-optimized OpenResty nginx.conf for the S3 proxy.
+ *
+ * Key optimization: UploadPart PUTs (detected by ?partNumber= in URI) are streamed
+ * directly to Supabase with proxy_request_buffering off — no disk spool.
+ * All other requests (listings, DeleteObjects, CompleteMultipart) remain buffered.
+ * All 3 Supabase bug fixes (XML rewrite, DeleteObjects mock, empty-body PutObject) preserved.
+ */
+export function generateS3ProxyNginxConfig(supabaseHost: string): string {
+  return `worker_processes 1;
+error_log /dev/stderr info;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    resolver 1.1.1.1 valid=30s;
+    proxy_temp_path /tmp/nginx_proxy_temp;
+
+    server {
+        listen 443 ssl;
+        server_name ${supabaseHost};
+
+        ssl_certificate /etc/nginx/certs/proxy.crt;
+        ssl_certificate_key /etc/nginx/certs/proxy.key;
+        client_max_body_size 0;
+
+        # BUG 3 FIX: Empty-body PutObject guard (skip for UploadPart — always has body)
+        rewrite_by_lua_block {
+            if ngx.req.get_method() == "PUT" then
+                local args = ngx.req.get_uri_args()
+                if not args["partNumber"] then
+                    ngx.req.read_body()
+                    local body = ngx.req.get_body_data()
+                    if not body then
+                        local file = ngx.req.get_body_file()
+                        if not file then
+                            ngx.req.set_body_data("")
+                            ngx.req.set_header("Content-Length", "0")
+                        end
+                    end
+                end
+            end
+        }
+
+        # ROUTE 1: UploadPart streaming path — proxy_request_buffering off
+        location ~ "^/storage/v1/s3/.+\\?.*partNumber=" {
+            proxy_request_buffering off;
+            proxy_buffering off;
+            proxy_pass https://${supabaseHost};
+            proxy_ssl_server_name on;
+            proxy_ssl_name ${supabaseHost};
+            proxy_set_header Host ${supabaseHost};
+            proxy_set_header Accept-Encoding "";
+            proxy_pass_request_headers on;
+            proxy_pass_request_body on;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+
+        # ROUTE 2: Bucket-level ops (DeleteObjects interceptor)
+        location ~ "^/storage/v1/s3/([^/]+)$" {
+            set \$bucket_name \$1;
+            access_by_lua_block {
+                local method = ngx.req.get_method()
+                local args = ngx.req.get_uri_args()
+                if method == "POST" and args["delete"] ~= nil then
+                    ngx.req.read_body()
+                    local body = ngx.req.get_body_data() or ""
+                    local resp = '<?xml version="1.0" encoding="UTF-8"?>'
+                    resp = resp .. '<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                    for key in body:gmatch("<Key>(.-)</Key>") do
+                        resp = resp .. '<Deleted><Key>' .. key .. '</Key></Deleted>'
+                    end
+                    resp = resp .. '</DeleteResult>'
+                    ngx.status = 200
+                    ngx.header["Content-Type"] = "application/xml"
+                    ngx.print(resp)
+                    return ngx.exit(200)
+                end
+            }
+            proxy_pass https://${supabaseHost}/storage/v1/s3/\$bucket_name\$is_args\$args;
+            proxy_ssl_server_name on;
+            proxy_ssl_name ${supabaseHost};
+            proxy_set_header Host ${supabaseHost};
+            proxy_set_header Accept-Encoding "";
+            proxy_pass_request_headers on;
+            proxy_pass_request_body on;
+            proxy_request_buffering on;
+            proxy_buffering on;
+            proxy_buffer_size 128k;
+            proxy_buffers 16 128k;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            sub_filter_types application/xml text/xml;
+            sub_filter_once off;
+            sub_filter '<PartNumberMarker/>' '<PartNumberMarker>0</PartNumberMarker>';
+            sub_filter '<NextPartNumberMarker/>' '<NextPartNumberMarker>0</NextPartNumberMarker>';
+            sub_filter '<EncodingType/>' '<EncodingType></EncodingType>';
+            sub_filter '<Delimiter/>' '<Delimiter></Delimiter>';
+            sub_filter '<KeyMarker/>' '<KeyMarker></KeyMarker>';
+            sub_filter '<UploadIdMarker/>' '<UploadIdMarker></UploadIdMarker>';
+            sub_filter '<NextKeyMarker/>' '<NextKeyMarker></NextKeyMarker>';
+            sub_filter '<NextUploadIdMarker/>' '<NextUploadIdMarker></NextUploadIdMarker>';
+            sub_filter '<Prefix/>' '<Prefix></Prefix>';
+            sub_filter '<ContinuationToken/>' '<ContinuationToken></ContinuationToken>';
+        }
+
+        # ROUTE 3: All other S3 paths (GetObject, PutObject, CompleteMultipart, etc.)
+        location /storage/v1/s3/ {
+            proxy_pass https://${supabaseHost}/storage/v1/s3/;
+            proxy_ssl_server_name on;
+            proxy_ssl_name ${supabaseHost};
+            proxy_set_header Host ${supabaseHost};
+            proxy_set_header Accept-Encoding "";
+            proxy_pass_request_headers on;
+            proxy_pass_request_body on;
+            proxy_request_buffering on;
+            proxy_buffering on;
+            proxy_buffer_size 128k;
+            proxy_buffers 16 128k;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            sub_filter_types application/xml text/xml;
+            sub_filter_once off;
+            sub_filter '<PartNumberMarker/>' '<PartNumberMarker>0</PartNumberMarker>';
+            sub_filter '<NextPartNumberMarker/>' '<NextPartNumberMarker>0</NextPartNumberMarker>';
+            sub_filter '<EncodingType/>' '<EncodingType></EncodingType>';
+            sub_filter '<Delimiter/>' '<Delimiter></Delimiter>';
+            sub_filter '<KeyMarker/>' '<KeyMarker></KeyMarker>';
+            sub_filter '<UploadIdMarker/>' '<UploadIdMarker></UploadIdMarker>';
+            sub_filter '<NextKeyMarker/>' '<NextKeyMarker></NextKeyMarker>';
+            sub_filter '<NextUploadIdMarker/>' '<NextUploadIdMarker></NextUploadIdMarker>';
+            sub_filter '<Prefix/>' '<Prefix></Prefix>';
+            sub_filter '<ContinuationToken/>' '<ContinuationToken></ContinuationToken>';
+        }
+    }
+}
+`;
+}
+
+/**
  * Helper: Get the manager node with decrypted SSH key.
  */
 async function getManagerNode(db: typeof import('@click-deploy/database').db, organizationId: string) {
@@ -833,5 +976,93 @@ export const infraRouter = createRouter({
         spaceReclaimed,
         nodeName: targetNode.name,
       };
+    }),
+  /** Hot-reload the S3 proxy nginx config without restarting the container.
+   * Writes the streaming-optimized config and sends a reload signal to OpenResty.
+   */
+  hotReloadS3Proxy: adminProcedure
+    .input(z.object({
+      supabaseHost: z.string().optional(),
+    }).optional())
+    .mutation(async ({ ctx, input }) => {
+      const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
+      const sshConfig = {
+        host: manager.host, port: manager.port,
+        username: manager.sshUser, privateKey: manager.privateKey,
+      };
+
+      // Auto-detect Supabase host from running proxy config if not provided
+      let supabaseHost = input?.supabaseHost;
+      if (!supabaseHost) {
+        const detect = await sshManager.exec(sshConfig,
+          `grep -m1 "server_name" /opt/click-deploy/s3-proxy/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';'`
+        );
+        supabaseHost = detect.stdout.trim() || 'htsgmthciflwefrippwf.supabase.co';
+      }
+
+      const newConfig = generateS3ProxyNginxConfig(supabaseHost);
+      const safeConfig = newConfig.replace(/'/g, "'\\''"  );
+
+      // Write config to disk
+      const writeResult = await sshManager.exec(sshConfig,
+        `cat > /opt/click-deploy/s3-proxy/nginx.conf << 'NGINX_EOF'\n${newConfig}\nNGINX_EOF`
+      );
+      if (writeResult.code !== 0) {
+        throw new Error(`Failed to write nginx.conf: ${writeResult.stderr}`);
+      }
+
+      // Get proxy container ID
+      const ctrResult = await sshManager.exec(sshConfig,
+        `docker ps --filter name=s3-proxy --format '{{.ID}}' | head -1`
+      );
+      const ctrId = ctrResult.stdout.trim();
+      if (!ctrId) {
+        throw new Error('S3 proxy container not running — cannot reload');
+      }
+
+      // Validate config syntax in container
+      const validateResult = await sshManager.exec(sshConfig,
+        `docker cp /opt/click-deploy/s3-proxy/nginx.conf ${ctrId}:/tmp/nginx-reload.conf && docker exec ${ctrId} openresty -t -c /tmp/nginx-reload.conf 2>&1`
+      );
+      if (validateResult.code !== 0) {
+        throw new Error(`nginx config syntax error: ${validateResult.stdout}`);
+      }
+
+      // Hot-reload
+      const reloadResult = await sshManager.exec(sshConfig,
+        `docker exec ${ctrId} openresty -s reload 2>&1`
+      );
+      if (reloadResult.code !== 0) {
+        throw new Error(`Failed to reload nginx: ${reloadResult.stderr}`);
+      }
+
+      return {
+        success: true,
+        message: `S3 proxy reloaded with streaming-optimized config (supabase host: ${supabaseHost})`,
+        containerId: ctrId,
+      };
+    }),
+
+  /** Set a swarm node's availability (active / drain / pause) */
+  setNodeAvailability: adminProcedure
+    .input(z.object({
+      hostname: z.string(),
+      availability: z.enum(['active', 'drain', 'pause']),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const manager = await getManagerNode(ctx.db, ctx.session.organizationId);
+      const sshConfig = {
+        host: manager.host, port: manager.port,
+        username: manager.sshUser, privateKey: manager.privateKey,
+      };
+
+      const result = await sshManager.exec(sshConfig,
+        `docker node update --availability ${input.availability} ${input.hostname} 2>&1`
+      );
+      if (result.code !== 0) {
+        throw new Error(`Failed to set node availability: ${result.stderr}`);
+      }
+
+      return { success: true, hostname: input.hostname, availability: input.availability };
     }),
 });
