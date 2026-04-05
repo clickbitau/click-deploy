@@ -105,6 +105,60 @@ install_docker() {
   echo -e "${GREEN}✓ Docker installed${NC}"
 }
 
+# ── Configure Docker Daemon (insecure registry for Swarm) ────
+configure_docker_daemon() {
+  DAEMON_JSON="/etc/docker/daemon.json"
+  # Detect this node's primary IP for the registry reference
+  NODE_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+
+  # If a manager IP was passed via MANAGER_IP env var, use that for registry;
+  # otherwise default to localhost (standalone single-node installs).
+  REGISTRY_IP="${MANAGER_IP:-$NODE_IP}"
+
+  echo -e "${BLUE}→ Configuring Docker daemon for private registry...${NC}"
+
+  # Build insecure-registries list — include all common access patterns
+  if [ -f "$DAEMON_JSON" ]; then
+    # Merge with existing config if present (preserve user settings)
+    if grep -q "insecure-registries" "$DAEMON_JSON" 2>/dev/null; then
+      echo -e "${GREEN}✓ Docker daemon.json already has insecure-registries configured${NC}"
+      return
+    fi
+    # File exists but no insecure-registries — add it via temp merge
+    echo -e "${YELLOW}→ Adding insecure-registries to existing daemon.json...${NC}"
+    python3 -c "
+import json, sys
+with open('$DAEMON_JSON') as f:
+    cfg = json.load(f)
+cfg.setdefault('insecure-registries', [])
+for reg in ['localhost:5000', '${REGISTRY_IP}:5000']:
+    if reg not in cfg['insecure-registries']:
+        cfg['insecure-registries'].append(reg)
+with open('$DAEMON_JSON', 'w') as f:
+    json.dump(cfg, f, indent=2)
+" 2>/dev/null || {
+      # Fallback if python3 not available — write fresh config
+      cat > "$DAEMON_JSON" <<DAEMONJSON
+{
+  "insecure-registries": ["localhost:5000", "${REGISTRY_IP}:5000"]
+}
+DAEMONJSON
+    }
+  else
+    # No daemon.json exists — create it
+    cat > "$DAEMON_JSON" <<DAEMONJSON
+{
+  "insecure-registries": ["localhost:5000", "${REGISTRY_IP}:5000"]
+}
+DAEMONJSON
+  fi
+
+  # Restart Docker to pick up the new config
+  systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+  sleep 3
+  echo -e "${GREEN}✓ Docker configured with insecure-registries: localhost:5000, ${REGISTRY_IP}:5000${NC}"
+}
+
 # ── Install Platform Tools ───────────────────────────────────
 install_tools() {
   echo ""
@@ -170,6 +224,7 @@ generate_secret() {
 
 detect_os
 install_docker
+configure_docker_daemon
 check_compose
 install_tools
 
