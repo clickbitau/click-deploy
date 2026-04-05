@@ -270,15 +270,15 @@ export class TraefikManager {
     const parts = inspect.stdout.trim().split(' ');
     let version = parts[0]?.replace('traefik:', '').replace(/@sha256:.+$/, '') || 'unknown';
 
-    // If tag is 'latest', query the actual version from the running container
+    // If tag is 'latest', query the actual version from OCI image labels
     if (version === 'latest' || version === 'unknown') {
       try {
         const versionCmd = await sshManager.exec(this.sshConfig,
-          `docker exec $(docker ps -q --filter "name=click-deploy-traefik" | head -1) traefik version 2>/dev/null | head -1 | awk '{print $2}'`
+          `docker image inspect traefik:latest --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null`
         );
         const actualVersion = versionCmd.stdout.trim();
-        if (actualVersion && actualVersion !== '') {
-          version = `v${actualVersion}`;
+        if (actualVersion && actualVersion !== '' && actualVersion !== '<no value>') {
+          version = actualVersion.startsWith('v') ? actualVersion : `v${actualVersion}`;
         }
       } catch {
         // Fall back to 'latest' if we can't get the actual version
