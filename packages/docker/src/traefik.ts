@@ -589,8 +589,10 @@ export class RegistryManager {
 
   /**
    * Get the registry URL (always port 5000 on the manager node).
+   * Uses Tailscale IP when available so remote worker nodes can reach it.
    */
   getRegistryUrl(): string {
-    return `${this.managerNode.host}:5000`;
+    const host = this.managerNode.tailscaleIp || this.managerNode.host;
+    return `${host}:5000`;
   }
 }

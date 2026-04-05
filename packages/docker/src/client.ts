@@ -16,6 +16,7 @@ export interface NodeConnectionInfo {
   sshUser: string;
   privateKey: string; // decrypted
   isLocal?: boolean;
+  tailscaleIp?: string | null;
 }
 
 

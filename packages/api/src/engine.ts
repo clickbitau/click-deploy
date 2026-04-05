@@ -98,6 +98,7 @@ function nodeToConnectionInfo(
     port: node.port,
     sshUser: node.sshUser,
     privateKey: decryptPrivateKey(sshKey.privateKey),
+    tailscaleIp: node.tailscaleIp,
   };
 }
 

@@ -81,6 +81,7 @@ async function getManagerNode(db: typeof import('@click-deploy/database').db, or
     port: node.port,
     sshUser: node.sshUser,
     privateKey: decryptPrivateKey(node.sshKey.privateKey),
+    tailscaleIp: node.tailscaleIp,
   };
 }
 
