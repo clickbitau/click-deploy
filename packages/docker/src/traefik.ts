@@ -130,6 +130,28 @@ export function generateSimpleTraefikLabels(
 
 // ── Traefik Service Manager ─────────────────────────────────
 
+/**
+ * Resolve the actual Swarm service name.
+ * Services deployed via `docker stack deploy click-deploy` use underscore
+ * separator (click-deploy_traefik), while standalone `docker service create`
+ * uses the exact name (click-deploy-traefik). Try stack name first.
+ */
+async function resolveServiceName(
+  sshConfig: { host: string; port: number; username: string; privateKey: string },
+  standaloneName: string
+): Promise<string> {
+  // Derive the stack name variant: click-deploy-traefik → click-deploy_traefik
+  const stackName = standaloneName.replace(/^click-deploy-/, 'click-deploy_');
+  // Try stack name first (most common in production)
+  const stackCheck = await sshManager.exec(sshConfig,
+    `docker service inspect ${stackName} --format '{{.ID}}' 2>/dev/null`
+  );
+  if (stackCheck.code === 0 && stackCheck.stdout.trim().length > 0) {
+    return stackName;
+  }
+  return standaloneName;
+}
+
 export class TraefikManager {
   constructor(private managerNode: NodeConnectionInfo) {}
 
@@ -245,10 +267,14 @@ export class TraefikManager {
    * Check if Traefik is running.
    */
   async isRunning(): Promise<boolean> {
+    const serviceName = await resolveServiceName(this.sshConfig, 'click-deploy-traefik');
     const result = await sshManager.exec(this.sshConfig,
-      `docker service inspect click-deploy-traefik --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null`
+      `docker service inspect ${serviceName} --format '{{.Spec.Mode.Global}}{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null`
     );
-    return result.code === 0 && parseInt(result.stdout.trim()) > 0;
+    if (result.code !== 0) return false;
+    const out = result.stdout.trim();
+    // Global mode returns non-empty .Spec.Mode.Global; replicated returns digit
+    return out.length > 0;
   }
 
   /**
@@ -260,8 +286,9 @@ export class TraefikManager {
     replicas?: number;
     ports?: string[];
   }> {
+    const serviceName = await resolveServiceName(this.sshConfig, 'click-deploy-traefik');
     const inspect = await sshManager.exec(this.sshConfig,
-      `docker service inspect click-deploy-traefik --format '{{.Spec.TaskTemplate.ContainerSpec.Image}} {{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null`
+      `docker service inspect ${serviceName} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}} {{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null`
     );
 
     if (inspect.code !== 0) {
@@ -298,7 +325,8 @@ export class TraefikManager {
    * Remove Traefik service entirely.
    */
   async remove(): Promise<void> {
-    await sshManager.exec(this.sshConfig, `docker service rm click-deploy-traefik 2>/dev/null || true`);
+    const serviceName = await resolveServiceName(this.sshConfig, 'click-deploy-traefik');
+    await sshManager.exec(this.sshConfig, `docker service rm ${serviceName} 2>/dev/null || true`);
   }
 
   /**
@@ -550,8 +578,9 @@ export class RegistryManager {
    * Check if registry is running and accessible.
    */
   async isRunning(): Promise<boolean> {
+    const serviceName = await resolveServiceName(this.sshConfig, 'click-deploy-registry');
     const result = await sshManager.exec(this.sshConfig,
-      `docker service ps click-deploy-registry --filter 'desired-state=running' --format '{{.ID}}' 2>/dev/null`
+      `docker service ps ${serviceName} --filter 'desired-state=running' --format '{{.ID}}' 2>/dev/null`
     );
     return result.code === 0 && result.stdout.trim().length > 0;
   }
@@ -565,14 +594,16 @@ export class RegistryManager {
     storageMode: 'local' | 's3' | 'unknown';
     mode: 'global' | 'replicated' | 'unknown';
   }> {
+    const serviceName = await resolveServiceName(this.sshConfig, 'click-deploy-registry');
+
     // Count running tasks
     const taskCount = await sshManager.exec(this.sshConfig,
-      `docker service ps click-deploy-registry --filter 'desired-state=running' --format '{{.ID}}' 2>/dev/null`
+      `docker service ps ${serviceName} --filter 'desired-state=running' --format '{{.ID}}' 2>/dev/null`
     );
 
     // Get env vars to determine storage mode
     const inspect = await sshManager.exec(this.sshConfig, [
-      `docker service inspect click-deploy-registry`,
+      `docker service inspect ${serviceName}`,
       `--format '{{if .Spec.Mode.Global}}global{{else}}replicated{{end}}|||{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{.}} {{end}}'`,
       `2>/dev/null`,
     ].join(' '));

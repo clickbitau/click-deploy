@@ -46,16 +46,32 @@ const INFRA_COMPONENTS = {
   traefik: {
     image: 'traefik',
     serviceName: 'click-deploy-traefik',
+    stackServiceName: 'click-deploy_traefik',
     tagPattern: /^v?\d+\.\d+(\.\d+)?$/,  // v3.x.y or 3.x.y
     fallbackTag: 'latest',
   },
   registry: {
     image: 'registry',
     serviceName: 'click-deploy-registry',
+    stackServiceName: 'click-deploy_registry',
     tagPattern: /^2(\.\d+)*$/,           // 2 or 2.x or 2.x.y
     fallbackTag: '2',
   },
 } as const;
+
+/** Resolve the actual running service name — try stack name (underscore) first */
+async function resolveInfraServiceName(
+  sshConfig: { host: string; port: number; username: string; privateKey: string },
+  comp: { serviceName: string; stackServiceName: string }
+): Promise<string> {
+  const stackCheck = await sshManager.exec(sshConfig,
+    `docker service inspect ${comp.stackServiceName} --format '{{.ID}}' 2>/dev/null`
+  );
+  if (stackCheck.code === 0 && stackCheck.stdout.trim().length > 0) {
+    return comp.stackServiceName;
+  }
+  return comp.serviceName;
+}
 
 /**
  * Generate the streaming-optimized OpenResty nginx.conf for the S3 proxy.
@@ -551,10 +567,11 @@ export const infraRouter = createRouter({
         tailscale.getStatus(),
         sshManager.exec(sshConfig, 'nixpacks --version 2>/dev/null || echo "not installed"').then(r => r.stdout.trim()),
         // Check the OpenResty S3 proxy — the critical XML-fixer that enables Supabase S3 storage
+        // Try both stack name (underscore) and standalone name (hyphen)
         sshManager.exec(sshConfig,
-          `docker service ls --filter name=click-deploy-s3-proxy --format '{{.Name}}\t{{.Replicas}}\t{{.Image}}' 2>/dev/null`
+          `docker service ls --filter name=click-deploy_s3-proxy --filter name=click-deploy-s3-proxy --format '{{.Name}}\t{{.Replicas}}\t{{.Image}}' 2>/dev/null`
         ).then(r => {
-          const line = r.stdout.trim();
+          const line = r.stdout.trim().split('\n')[0]; // take first match
           if (!line) return { running: false, replicas: '0/0', image: null };
           const [, replicas, image] = line.split('\t');
           const [running, desired] = (replicas || '0/0').split('/');
@@ -648,10 +665,12 @@ export const infraRouter = createRouter({
       }> = {};
 
       for (const [key, comp] of Object.entries(INFRA_COMPONENTS)) {
+        // Resolve actual service name (stack vs standalone)
+        const actualName = await resolveInfraServiceName(sshConfig, comp as any);
         // Get running image info from Swarm
         const inspectResult = await sshManager.exec(
           sshConfig,
-          `docker service inspect ${comp.serviceName} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null`
+          `docker service inspect ${actualName} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null`
         );
         const runningImage = inspectResult.code === 0 ? inspectResult.stdout.trim() : '';
         if (!runningImage) {
@@ -764,7 +783,8 @@ export const infraRouter = createRouter({
             const latest = await getLatestDockerHubVersion('traefik', INFRA_COMPONENTS.traefik.tagPattern);
             resolvedVersion = latest?.tag || INFRA_COMPONENTS.traefik.fallbackTag;
           }
-          command = `docker service update --image traefik:${resolvedVersion} click-deploy-traefik --force`;
+          const traefikName = await resolveInfraServiceName(sshConfig, INFRA_COMPONENTS.traefik);
+          command = `docker service update --image traefik:${resolvedVersion} ${traefikName} --force`;
           break;
         }
         case 'registry': {
@@ -772,7 +792,8 @@ export const infraRouter = createRouter({
             const latest = await getLatestDockerHubVersion('registry', INFRA_COMPONENTS.registry.tagPattern);
             resolvedVersion = latest?.tag || INFRA_COMPONENTS.registry.fallbackTag;
           }
-          command = `docker service update --image registry:${resolvedVersion} click-deploy-registry --force`;
+          const registryName = await resolveInfraServiceName(sshConfig, INFRA_COMPONENTS.registry);
+          command = `docker service update --image registry:${resolvedVersion} ${registryName} --force`;
           break;
         }
         case 'nixpacks':

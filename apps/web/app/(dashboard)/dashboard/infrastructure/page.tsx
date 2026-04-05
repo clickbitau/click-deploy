@@ -1,13 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { trpc } from '@/lib/trpc';
 import { Server, RefreshCw, Activity, Layers, Cpu } from 'lucide-react';
 
 export default function InfrastructurePage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const { data: nodes, isLoading: nodesLoading, refetch: refetchNodes } = trpc.infra.getSwarmNodes.useQuery(
+  const { data: swarmNodes, isLoading: nodesLoading, refetch: refetchNodes } = trpc.infra.getSwarmNodes.useQuery(
     undefined,
     { refetchInterval: autoRefresh ? 15000 : false }
   );
@@ -16,6 +16,33 @@ export default function InfrastructurePage() {
     undefined,
     { refetchInterval: autoRefresh ? 15000 : false }
   );
+
+  // Fetch DB nodes to cross-reference Docker hostnames → dashboard names
+  const { data: dbNodes } = trpc.node.list.useQuery();
+
+  // Build a hostname → dashboard name map
+  const hostnameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (dbNodes) {
+      for (const node of dbNodes as any[]) {
+        // Match by hostname (case-insensitive)
+        if (node.hostname) map.set(node.hostname.toLowerCase(), node.name);
+        // Also try to match by the host field (IP or hostname used for SSH)
+        if (node.host) map.set(node.host.toLowerCase(), node.name);
+        // Match by name too (if Docker hostname happens to be the DB name)
+        if (node.name) map.set(node.name.toLowerCase(), node.name);
+      }
+    }
+    return map;
+  }, [dbNodes]);
+
+  const getDisplayName = (dockerHostname: string) => {
+    const dbName = hostnameMap.get(dockerHostname?.toLowerCase());
+    if (dbName && dbName.toLowerCase() !== dockerHostname?.toLowerCase()) {
+      return { primary: dbName, secondary: dockerHostname };
+    }
+    return { primary: dockerHostname, secondary: null };
+  };
 
   const handleRefresh = () => {
     refetchNodes();
@@ -73,38 +100,46 @@ export default function InfrastructurePage() {
           <h2 className="text-lg font-semibold">Swarm Nodes</h2>
         </div>
         
-        {nodesLoading && !nodes ? (
+        {nodesLoading && !swarmNodes ? (
           <div className="h-32 glass-card flex items-center justify-center text-white/40">Loading nodes...</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {nodes?.map((node: any) => (
-              <div key={node.id} className="glass-card p-5 space-y-3 relative overflow-hidden group">
-                <div className="absolute top-0 left-0 w-1 h-full bg-brand-500/30 transition-colors group-hover:bg-brand-500" />
-                
-                <div className="flex items-center justify-between">
-                  <h3 className="font-medium text-white/90 text-lg flex items-center gap-2">
-                    <span className={`w-2.5 h-2.5 rounded-full ${node.status === 'Ready' ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]'}`} />
-                    {node.hostname}
-                  </h3>
-                  {node.managerStatus && (
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                      node.managerStatus === 'Leader' ? 'bg-brand-500/20 text-brand-400 border border-brand-500/30' :
-                      node.managerStatus === 'Reachable' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                      'bg-red-500/20 text-red-500 border border-red-500/30'
-                    }`}>
-                      {node.managerStatus}
-                    </span>
-                  )}
+            {swarmNodes?.map((node: any) => {
+              const display = getDisplayName(node.hostname);
+              return (
+                <div key={node.id} className="glass-card p-5 space-y-3 relative overflow-hidden group">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-brand-500/30 transition-colors group-hover:bg-brand-500" />
+                  
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-medium text-white/90 text-lg flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full ${node.status === 'Ready' ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]'}`} />
+                      {display.primary}
+                    </h3>
+                    {node.managerStatus && (
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        node.managerStatus === 'Leader' ? 'bg-brand-500/20 text-brand-400 border border-brand-500/30' :
+                        node.managerStatus === 'Reachable' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                        'bg-red-500/20 text-red-500 border border-red-500/30'
+                      }`}>
+                        {node.managerStatus}
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-xs text-white/50 border-t border-white/5 pt-3">
+                    <span className="font-mono">{node.id.substring(0, 12)}</span>
+                    <div className="flex items-center gap-2">
+                      {display.secondary && (
+                        <span className="text-white/25">{display.secondary}</span>
+                      )}
+                      <span className="flex items-center gap-1">
+                        v{node.engineVersion}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                
-                <div className="flex items-center justify-between text-xs text-white/50 border-t border-white/5 pt-3">
-                  <span className="font-mono">{node.id.substring(0, 12)}</span>
-                  <span className="flex items-center gap-1">
-                    v{node.engineVersion}
-                  </span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

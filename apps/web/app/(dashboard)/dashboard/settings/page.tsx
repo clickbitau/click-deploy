@@ -499,9 +499,11 @@ function InfrastructureTab() {
             />
             <StatusCard
               label="Nixpacks Builder"
-              value={status?.nixpacks ? `v${status.nixpacks}` : 'Not installed'}
+              value={status?.nixpacks && status.nixpacks !== 'not installed' && status.nixpacks !== 'unknown'
+                ? (status.nixpacks.startsWith('v') ? status.nixpacks : `v${status.nixpacks}`)
+                : 'Not installed'}
               detail="Auto-detects build environments"
-              active={status?.nixpacks !== 'unknown' && status?.nixpacks !== 'not installed'}
+              active={!!status?.nixpacks && status.nixpacks !== 'unknown' && status.nixpacks !== 'not installed'}
             />
           </div>
         )}

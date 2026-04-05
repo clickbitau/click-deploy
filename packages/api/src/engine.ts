@@ -399,8 +399,12 @@ export class DeploymentEngine {
         const isTimeout = !message.includes('cancelled');
         const reason = isTimeout ? 'Timed out after 30 minutes' : 'Cancelled by user';
         this.log(deploymentId, 'cancelled', `Deployment ${isTimeout ? 'timed out' : 'was cancelled by user'}`, 'error');
+        // Always move buildStatus to a terminal state to prevent the concurrency guard
+        // from blocking future deploys. If build hadn't started, mark cancelled; if build
+        // was in progress, mark cancelled; if build already succeeded, leave as 'built'.
+        const terminalBuildStatus = deployStartTime ? undefined : 'cancelled';
         await updateDeployment(deploymentId, {
-          buildStatus: buildStartTime && !deployStartTime ? 'cancelled' : undefined,
+          buildStatus: terminalBuildStatus,
           deployStatus: 'cancelled',
           errorMessage: reason,
           buildLogs: this.logsToText(deploymentId),
@@ -408,8 +412,13 @@ export class DeploymentEngine {
         });
       } else {
         this.log(deploymentId, 'error', `Deployment failed: ${message}`, 'error');
+        // Always move buildStatus to a terminal state. If we already reached the deploy
+        // phase (deployStartTime is set), the build succeeded so leave it as 'built'.
+        // Otherwise mark it as 'failed' — this covers both "build failed" and
+        // "failed before build started" (e.g., resolveContext error).
+        const terminalBuildStatus = deployStartTime ? undefined : 'failed';
         await updateDeployment(deploymentId, {
-          buildStatus: buildStartTime && !deployStartTime ? 'failed' : undefined,
+          buildStatus: terminalBuildStatus,
           deployStatus: 'failed',
           errorMessage: message,
           buildLogs: this.logsToText(deploymentId),
@@ -1110,7 +1119,20 @@ export class DeploymentEngine {
 
         let swarmId = nodeRecord.swarmNodeId;
 
-        // If we don't have a cached swarmNodeId, resolve it now
+        // Validate cached swarmNodeId still exists in the live Swarm
+        if (swarmId) {
+          const stillExists = swarmNodes.some(
+            (sn: { id: string; hostname: string; status: string }) => sn.id === swarmId
+          );
+          if (!stillExists) {
+            this.log(deploymentId, 'deploy', `Cached Swarm node ID ${swarmId} for "${nodeRecord.name}" is stale (node no longer in Swarm). Re-resolving...`, 'error');
+            swarmId = null;
+            // Clear the stale cache
+            await db.update(nodes).set({ swarmNodeId: null }).where(eq(nodes.id, nodeId));
+          }
+        }
+
+        // If we don't have a (valid) swarmNodeId, resolve it now
         if (!swarmId) {
           // Match by hostname or by host IP — Swarm node hostnames can be anything
           const match = swarmNodes.find(
@@ -1139,7 +1161,13 @@ export class DeploymentEngine {
         if (labelResult.code === 0) {
           labeledCount++;
         } else {
+          // Label failed — could mean the node was removed between our check and now
           this.log(deploymentId, 'deploy', `Failed to label Swarm node ${swarmId}: ${labelResult.stderr}`, 'error');
+          // Clear the stale swarmNodeId so future deploys re-resolve
+          if (labelResult.stderr?.includes('not found')) {
+            await db.update(nodes).set({ swarmNodeId: null }).where(eq(nodes.id, nodeId));
+            this.log(deploymentId, 'deploy', `Cleared stale Swarm node ID for "${nodeRecord.name}"`);
+          }
         }
       }
 

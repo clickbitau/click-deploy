@@ -33,6 +33,7 @@ import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
 import { useConfirm } from '@/components/confirm-dialog';
+import { toast } from 'sonner';
 
 const deployStatusConfig: Record<string, { icon: typeof CheckCircle2; class: string; dot: string; label: string }> = {
   running: { icon: CheckCircle2, class: 'text-success-400', dot: 'status-running', label: 'Running' },
@@ -72,7 +73,7 @@ export default function ServiceDetailPage() {
   useEffect(() => {
     const active = deployments?.some((d: any) =>
       ['building', 'deploying', 'pending'].includes(d.deployStatus) ||
-      ['building'].includes(d.buildStatus)
+      ['pending', 'building'].includes(d.buildStatus)
     ) ?? false;
     setHasActiveDeployment(active);
   }, [deployments]);
@@ -739,17 +740,36 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
   const updateService = trpc.service.update.useMutation();
   const { data: nodesList } = trpc.node.list.useQuery();
 
+  const getInitialDeployNodeIds = () => (service.deployNodeIds as string[]) || [];
+  const getInitialReplicasPerNode = () => {
+    const ids = getInitialDeployNodeIds();
+    return ids.length > 0
+      ? Math.max(1, Math.round((service.replicas || 1) / ids.length))
+      : (service.replicas || 1);
+  };
+
   const [autoDeploy, setAutoDeploy] = useState(service.autoDeploy ?? true);
   const [dockerfilePath, setDockerfilePath] = useState(service.dockerfilePath || '');
   const [dockerContext, setDockerContext] = useState(service.dockerContext || '.');
   const [buildNodeId, setBuildNodeId] = useState(service.buildNodeId || '');
-  const initDeployNodeIds = (service.deployNodeIds as string[]) || [];
-  const initReplicasPerNode = initDeployNodeIds.length > 0
-    ? Math.max(1, Math.round((service.replicas || 1) / initDeployNodeIds.length))
-    : (service.replicas || 1);
-  const [replicasPerNode, setReplicasPerNode] = useState(initReplicasPerNode);
-  const [deployNodeIds, setDeployNodeIds] = useState<string[]>(initDeployNodeIds);
+  const [replicasPerNode, setReplicasPerNode] = useState(getInitialReplicasPerNode());
+  const [deployNodeIds, setDeployNodeIds] = useState<string[]>(getInitialDeployNodeIds());
   const [settingsSaved, setSettingsSaved] = useState(false);
+
+  // Re-sync local state when the service data changes (e.g., after refetch)
+  useEffect(() => {
+    setAutoDeploy(service.autoDeploy ?? true);
+    setDockerfilePath(service.dockerfilePath || '');
+    setDockerContext(service.dockerContext || '.');
+    setBuildNodeId(service.buildNodeId || '');
+    const ids = (service.deployNodeIds as string[]) || [];
+    setDeployNodeIds(ids);
+    setReplicasPerNode(
+      ids.length > 0
+        ? Math.max(1, Math.round((service.replicas || 1) / ids.length))
+        : (service.replicas || 1)
+    );
+  }, [service.id, service.updatedAt]);
 
   const nodes = nodesList || [];
   const deployNodes = nodes.filter((n: any) => n.canDeploy);
@@ -769,8 +789,8 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
       replicas: totalReplicas,
       replicasPerNode,
       autoDeploy,
-      dockerfilePath: dockerfilePath || undefined,
-      dockerContext,
+      dockerfilePath: dockerfilePath || 'Dockerfile',
+      dockerContext: dockerContext || '.',
       buildNodeId: buildNodeId || undefined,
       deployNodeIds,
       targetNodeId: deployNodeIds[0] || undefined,
@@ -779,6 +799,9 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
         setSettingsSaved(true);
         setTimeout(() => setSettingsSaved(false), 3000);
         onSave();
+      },
+      onError: (err: any) => {
+        toast.error(`Failed to save settings: ${err.message}`);
       },
     });
   };
@@ -862,6 +885,12 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
             className="w-4 h-4 rounded border-white/10 bg-black/40 text-brand-500" />
           <span className="text-xs text-white/50">Auto-deploy on push</span>
         </label>
+
+        {updateService.isError && (
+          <div className="text-xs px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-2 animate-fade-in mb-2">
+            <XCircle className="w-3.5 h-3.5 shrink-0" /> {updateService.error?.message || 'Failed to save settings'}
+          </div>
+        )}
 
         {settingsSaved && (
           <div className="text-xs px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center gap-2 animate-fade-in mb-2">
