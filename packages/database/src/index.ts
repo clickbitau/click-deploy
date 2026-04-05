@@ -12,10 +12,14 @@ if (!connectionString) {
 }
 
 // Connection for queries
+// - max: 3 keeps total connections across 3 replicas ≤ 9 (within Supabase pool limits)
+// - prepare: false is REQUIRED for Supabase Transaction mode (port 6543) — PgBouncer
+//   doesn't support named prepared statements since connections are shared
 const queryClient = postgres(connectionString, {
-  max: 10,
+  max: 3,
   idle_timeout: 20,
   connect_timeout: 10,
+  prepare: false,
 });
 
 // Drizzle instance with full schema

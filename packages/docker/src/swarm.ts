@@ -350,6 +350,21 @@ export class SwarmManager {
     }
 
     if (opts?.constraints) {
+      // First, remove existing click-deploy placement constraints to prevent accumulation.
+      // `--constraint-add` appends, so without removal the same constraint stacks on every deploy.
+      const inspectResult = await sshManager.exec(
+        this.sshConfig,
+        `docker service inspect ${serviceName} --format '{{json .Spec.TaskTemplate.Placement.Constraints}}'`
+      );
+      try {
+        const existing = JSON.parse(inspectResult.stdout.trim() || '[]') as string[];
+        for (const c of existing) {
+          if (c.includes('click-deploy.svc-')) {
+            args.push('--constraint-rm', c);
+          }
+        }
+      } catch { /* ignore parse errors — fresh service has no constraints */ }
+
       for (const constraint of opts.constraints) {
         args.push('--constraint-add', constraint);
       }

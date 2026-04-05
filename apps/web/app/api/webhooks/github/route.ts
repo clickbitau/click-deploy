@@ -16,10 +16,10 @@ const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 /**
  * Verify the GitHub webhook signature (X-Hub-Signature-256).
  */
-function verifySignature(payload: string, signature: string | null): boolean {
-  if (!WEBHOOK_SECRET || !signature) return false;
+function verifySignature(payload: string, signature: string | null, secret: string | null): boolean {
+  if (!secret || !signature) return false;
 
-  const expected = `sha256=${createHmac('sha256', WEBHOOK_SECRET)
+  const expected = `sha256=${createHmac('sha256', secret)
     .update(payload)
     .digest('hex')}`;
 
@@ -46,19 +46,6 @@ export async function POST(req: NextRequest) {
     const branch = ref?.replace('refs/heads/', '');
     
     console.log(`[webhook] RECEIVED EVENT: type=${event}, repo=${repoUrl}, ref=${ref}`);
-
-    // Verify signature if secret is configured
-    if (WEBHOOK_SECRET) {
-      if (!verifySignature(body, signature)) {
-        console.warn(`[webhook] Invalid GitHub webhook signature from ${req.headers.get('x-forwarded-for') || 'unknown'}`);
-        return NextResponse.json(
-          { error: 'Invalid signature' },
-          { status: 401 }
-        );
-      }
-    } else {
-      console.warn('[webhook] WARNING: GITHUB_WEBHOOK_SECRET is not set. Webhook processed without signature validation.');
-    }
 
     // Only handle push events
     if (event !== 'push') {
@@ -87,7 +74,7 @@ export async function POST(req: NextRequest) {
     const normalizeUrl = (url: string) =>
       url.replace(/\.git$/, '').replace(/\/$/, '').toLowerCase();
 
-    const matchingServices = allServices.filter((svc) => {
+    let matchingServices = allServices.filter((svc) => {
       if (!svc.gitUrl) return false;
       const urlMatch = normalizeUrl(svc.gitUrl) === normalizeUrl(repoUrl);
       const branchMatch = (svc.gitBranch || 'main') === branch;
@@ -101,6 +88,20 @@ export async function POST(req: NextRequest) {
         repoUrl,
         branch,
       });
+    }
+
+    // Verify signatures per-service
+    matchingServices = matchingServices.filter(svc => {
+      const secret = svc.webhookSecret || WEBHOOK_SECRET || null;
+      return verifySignature(body, signature, secret);
+    });
+
+    if (matchingServices.length === 0) {
+      console.warn(`[webhook] Invalid GitHub webhook signature for repo ${repoUrl}`);
+      return NextResponse.json(
+        { error: 'Invalid signature' },
+        { status: 401 }
+      );
     }
 
     // Trigger deployments for all matching services
