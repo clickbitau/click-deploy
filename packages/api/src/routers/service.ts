@@ -3,11 +3,39 @@
 // ============================================================
 import { z } from 'zod';
 import { eq, and, desc } from 'drizzle-orm';
-import { services, projects, nodes } from '@click-deploy/database';
+import { services, projects, nodes, auditLogs } from '@click-deploy/database';
 import { createRouter, protectedProcedure } from '../trpc';
 import { sanitizeDockerName, sanitizeEnvPair } from '../shell';
 
 import { randomBytes } from 'crypto';
+
+/**
+ * Write an audit trail entry for any service-level operation.
+ * Non-blocking — errors are swallowed so audits never break the primary flow.
+ */
+async function audit(db: any, ctx: { session: { organizationId: string; userId: string } }, params: {
+  action: string;
+  resourceType: string;
+  resourceId?: string;
+  resourceName?: string;
+  description?: string;
+  metadata?: Record<string, any>;
+}) {
+  try {
+    await db.insert(auditLogs).values({
+      organizationId: ctx.session.organizationId,
+      userId: ctx.session.userId,
+      action: params.action,
+      resourceType: params.resourceType,
+      resourceId: params.resourceId,
+      resourceName: params.resourceName,
+      description: params.description,
+      metadata: params.metadata || {},
+    });
+  } catch (e) {
+    console.warn('[audit] Failed to write audit log:', e);
+  }
+}
 
 /** Consistent service naming — MUST match engine.ts getSwarmServiceName */
 function getSwarmServiceName(serviceName: string): string {
@@ -310,6 +338,15 @@ export const serviceRouter = createRouter({
         await autoRegisterGithubWebhook(service.gitUrl, webhookSecret, ctx.session.userId, ctx);
       }
 
+      audit(ctx.db, ctx, {
+        action: 'service.create',
+        resourceType: 'service',
+        resourceId: service.id,
+        resourceName: service.name,
+        description: `Created service "${service.name}" (${service.sourceType})`,
+        metadata: { sourceType: service.sourceType, replicas },
+      });
+
       return service;
     }),
 
@@ -435,6 +472,14 @@ export const serviceRouter = createRouter({
       // 3. Delete the service record (deployments cascade via FK)
       await ctx.db.delete(services).where(eq(services.id, input.id));
 
+      audit(ctx.db, ctx, {
+        action: 'service.delete',
+        resourceType: 'service',
+        resourceId: input.id,
+        resourceName: existing.name,
+        description: `Deleted service "${existing.name}"`,
+      });
+
       return { success: true };
     }),
 
@@ -476,6 +521,14 @@ export const serviceRouter = createRouter({
         throw new Error(`Restart failed: ${result.stderr}`);
       }
 
+      audit(ctx.db, ctx, {
+        action: 'service.restart',
+        resourceType: 'service',
+        resourceId: input.id,
+        resourceName: service.name,
+        description: `Restarted service "${service.name}"`,
+      });
+
       return { success: true, message: 'Service restarting with updated configuration' };
     }),
 
@@ -499,6 +552,15 @@ export const serviceRouter = createRouter({
       if (result.code !== 0) throw new Error(`Stop failed: ${result.stderr}`);
 
       await ctx.db.update(services).set({ status: 'stopped', updatedAt: new Date() }).where(eq(services.id, input.id));
+
+      audit(ctx.db, ctx, {
+        action: 'service.stop',
+        resourceType: 'service',
+        resourceId: input.id,
+        resourceName: service.name,
+        description: `Stopped service "${service.name}"`,
+      });
+
       return { success: true };
     }),
 
@@ -523,6 +585,15 @@ export const serviceRouter = createRouter({
       if (result.code !== 0) throw new Error(`Start failed: ${result.stderr}`);
 
       await ctx.db.update(services).set({ status: 'running', updatedAt: new Date() }).where(eq(services.id, input.id));
+
+      audit(ctx.db, ctx, {
+        action: 'service.start',
+        resourceType: 'service',
+        resourceId: input.id,
+        resourceName: service.name,
+        description: `Started service "${service.name}" with ${replicas} replicas`,
+      });
+
       return { success: true };
     }),
 
@@ -574,6 +645,15 @@ export const serviceRouter = createRouter({
       // Fire the engine asynchronously
       const { deploymentEngine } = await import('../engine');
       deploymentEngine.runDeployment(deployment!.id).catch(console.error);
+
+      audit(ctx.db, ctx, {
+        action: 'service.rebuild',
+        resourceType: 'service',
+        resourceId: service.id,
+        resourceName: service.name,
+        description: `Triggered rebuild for "${service.name}"`,
+        metadata: { deploymentId: deployment!.id },
+      });
 
       return { success: true, deploymentId: deployment!.id };
     }),

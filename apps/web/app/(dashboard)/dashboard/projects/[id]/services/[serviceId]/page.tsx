@@ -1131,27 +1131,107 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
 
+  const [logs, setLogs] = useState<{ container: string; node: string; message: string; taskId?: string }[]>([]);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'error' | 'closed'>('connecting');
+  const [wsError, setWsError] = useState<string | null>(null);
+
   const { data: containers } = trpc.service.getContainers.useQuery(
     { serviceId },
-    { refetchInterval: autoRefresh ? 2000 : false }
-  );
-
-  const { data, isLoading, isError, error, refetch } = trpc.service.getLogs.useQuery(
-    { serviceId, tail, taskId: selectedTaskId || undefined },
-    { retry: 1, refetchInterval: autoRefresh ? 3000 : false }
+    { refetchInterval: autoRefresh ? 5000 : false }
   );
 
   useEffect(() => {
-    if (logRef.current) {
+    let ws: WebSocket | null = null;
+    let cancelled = false;
+
+    if (!autoRefresh) {
+      setWsStatus('closed');
+      return;
+    }
+
+    setWsStatus('connecting');
+    setWsError(null);
+    setLogs([]);
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/logs?serviceId=${serviceId}&tail=${tail}`;
+    
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      if (!cancelled) setWsStatus('connected');
+    };
+
+    ws.onmessage = (event) => {
+      if (cancelled) return;
+      const rawText = event.data;
+      
+      const lines = rawText.split('\n').filter(Boolean);
+      const newLogs = lines.map(line => {
+        const match = line.match(/^([^|]+)\|\s*(.*)$/);
+        if (match) {
+          const prefix = match[1]?.trim() || '';
+          const message = match[2] || '';
+          let slot = '?';
+          let node = '?';
+          let taskId = '';
+          
+          const atSplit = prefix.split('@');
+          if (atSplit.length === 2) {
+            node = atSplit[1]?.trim() || '?';
+            const dotSplit = atSplit[0]?.split('.');
+            if (dotSplit && dotSplit.length >= 3) {
+              slot = dotSplit[1] || '?';
+              taskId = dotSplit[2] || '';
+            }
+          }
+          return { container: slot, node: node, message, taskId };
+        }
+        return { container: '?', node: '?', message: line };
+      });
+      
+      setLogs((prev) => {
+        const updated = [...prev, ...newLogs];
+        // Keep memory bounded
+        if (updated.length > 3000) return updated.slice(updated.length - 3000);
+        return updated;
+      });
+    };
+
+    ws.onerror = () => {
+      if (!cancelled) {
+        setWsStatus('error');
+        setWsError('WebSocket connection failed');
+      }
+    };
+
+    ws.onclose = () => {
+      if (!cancelled && wsStatus !== 'error') {
+        setWsStatus('closed');
+      }
+    };
+
+    return () => {
+      cancelled = true;
+      ws?.close();
+    };
+  }, [serviceId, tail, autoRefresh]);
+
+  useEffect(() => {
+    if (logRef.current && autoRefresh) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [data?.logs]);
+  }, [logs, autoRefresh]);
 
   const getSlotColor = (slot: string | number) => {
     const colors = ['text-blue-400', 'text-emerald-400', 'text-amber-400', 'text-purple-400', 'text-pink-400', 'text-cyan-400'];
     const s = typeof slot === 'number' ? slot : parseInt(String(slot).replace(/\D/g, '') || '0', 10);
     return colors[s % colors.length];
   };
+
+  const filteredLogs = selectedTaskId 
+    ? logs.filter((l) => l.taskId === selectedTaskId || !l.taskId)
+    : logs;
 
   return (
     <div className="glass-card p-6">
@@ -1160,7 +1240,14 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
           <ScrollText className="w-4 h-4 text-brand-400" />
           <div>
             <h3 className="text-sm font-semibold">Service Logs</h3>
-            <p className="text-[11px] text-white/30">Live output from running containers</p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                wsStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
+                wsStatus === 'connecting' ? 'bg-amber-400 animate-pulse' :
+                wsStatus === 'error' ? 'bg-red-400' : 'bg-white/20'
+              }`} />
+              <p className="text-[11px] text-white/30 capitalize">{wsStatus}</p>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1182,13 +1269,13 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
             }`}
           >
             {autoRefresh && <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />}
-            {autoRefresh ? 'Auto' : 'Paused'}
+            {autoRefresh ? 'Streaming' : 'Paused'}
           </button>
           <button
-            onClick={() => refetch()}
+            onClick={() => setLogs([])}
             className="px-2.5 py-1 rounded-lg border border-white/10 text-xs text-white/40 hover:bg-white/5 transition-colors"
           >
-            <RefreshCw className="w-3 h-3" />
+            Clear
           </button>
         </div>
       </div>
@@ -1228,10 +1315,10 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
         ref={logRef}
         className="bg-black/80 border border-white/10 rounded-lg p-4 text-[11px] text-white/60 font-mono max-h-[500px] overflow-auto whitespace-pre-wrap scroll-smooth leading-5"
       >
-        {isLoading ? 'Loading logs...' : isError ? (
-          <span className="text-danger-400">Error: {(error as any)?.message || 'No manager node available'}</span>
-        ) : (
-          data?.logs?.map((log: any, idx: number) => (
+        {wsStatus === 'connecting' && logs.length === 0 ? 'Connecting to logs stream...' : wsError ? (
+          <span className="text-danger-400">Error: {wsError}</span>
+        ) : filteredLogs.length > 0 ? (
+          filteredLogs.map((log, idx) => (
             <div key={idx} className="break-all">
               {log.container !== '?' && selectedTaskId === null && (
                 <span className={`mr-2 font-bold ${getSlotColor(log.container)}`}>
@@ -1240,8 +1327,8 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
               )}
               {log.message}
             </div>
-          )) || 'No logs available'
-        )}
+          ))
+        ) : 'No logs available'}
       </pre>
     </div>
   );
