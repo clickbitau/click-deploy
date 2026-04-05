@@ -34,17 +34,30 @@ function verifySignature(payload: string, signature: string | null): boolean {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.text();
-    const signature = req.headers.get('x-hub-signature-256');
     const event = req.headers.get('x-github-event');
+    const signature = req.headers.get('x-hub-signature-256');
+    const body = await req.text();
+
+    const payload = body ? JSON.parse(body) : {};
+
+    // Extract push info
+    const repoUrl = payload.repository?.clone_url || payload.repository?.html_url;
+    const ref = payload.ref; // e.g. "refs/heads/main"
+    const branch = ref?.replace('refs/heads/', '');
+    
+    console.log(`[webhook] RECEIVED EVENT: type=${event}, repo=${repoUrl}, ref=${ref}`);
 
     // Verify signature if secret is configured
-    if (WEBHOOK_SECRET && !verifySignature(body, signature)) {
-      console.error('[webhook] Invalid GitHub webhook signature');
-      return NextResponse.json(
-        { error: 'Invalid signature' },
-        { status: 401 }
-      );
+    if (WEBHOOK_SECRET) {
+      if (!verifySignature(body, signature)) {
+        console.warn(`[webhook] Invalid GitHub webhook signature from ${req.headers.get('x-forwarded-for') || 'unknown'}`);
+        return NextResponse.json(
+          { error: 'Invalid signature' },
+          { status: 401 }
+        );
+      }
+    } else {
+      console.warn('[webhook] WARNING: GITHUB_WEBHOOK_SECRET is not set. Webhook processed without signature validation.');
     }
 
     // Only handle push events
@@ -52,12 +65,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: 'ignored', event });
     }
 
-    const payload = JSON.parse(body);
-
-    // Extract push info
-    const repoUrl = payload.repository?.clone_url || payload.repository?.html_url;
-    const ref = payload.ref; // e.g. "refs/heads/main"
-    const branch = ref?.replace('refs/heads/', '');
     const commitSha = payload.after;
     const commitMessage = payload.head_commit?.message || '';
     const pusher = payload.pusher?.name || 'unknown';
@@ -88,7 +95,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (matchingServices.length === 0) {
-      console.log('[webhook] No matching services found');
+      console.log(`[webhook] No matching services found for normalized URL: ${normalizeUrl(repoUrl)} (branch: ${branch})`);
       return NextResponse.json({
         status: 'no_match',
         repoUrl,
@@ -122,7 +129,7 @@ export async function POST(req: NextRequest) {
         });
 
         triggered.push(svc.name);
-        console.log(`[webhook] Triggered deployment for service: ${svc.name}`);
+        console.log(`[webhook] MATCH FOUND: Triggered deployment for service: ${svc.name} using normalized URL: ${normalizeUrl(svc.gitUrl || '')}`);
       } catch (err) {
         console.error(`[webhook] Failed to trigger for ${svc.name}:`, err);
       }

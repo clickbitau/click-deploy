@@ -375,6 +375,7 @@ function AddServiceSlideOver({ projectId, onClose, onSuccess }: {
           <>
             <FormField label="Git URL" hint="HTTPS or SSH clone URL">
               <FormInput value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} placeholder="https://github.com/user/repo.git" />
+              <p className="text-[10px] text-white/30 mt-1">Use the HTTPS clone URL from GitHub (e.g. https://github.com/org/repo)</p>
             </FormField>
             <FormField label="Branch">
               <FormInput value={gitBranch} onChange={(e) => setGitBranch(e.target.value)} />

@@ -1007,8 +1007,8 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const logRef = useRef<HTMLPreElement>(null);
 
-  const { data, isLoading, refetch } = trpc.service.logs.useQuery(
-    { id: serviceId, tail },
+  const { data, isLoading, isError, error, refetch } = trpc.service.getLogs.useQuery(
+    { serviceId, tail },
     { retry: 1, refetchInterval: autoRefresh ? 5000 : false }
   );
 
@@ -1034,10 +1034,9 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
             onChange={(e) => setTail(Number(e.target.value))}
             className="bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-white/60"
           >
-            <option value={50}>Last 50</option>
             <option value={100}>Last 100</option>
-            <option value={200}>Last 200</option>
             <option value={500}>Last 500</option>
+            <option value={1000}>Last 1000</option>
           </select>
           <button
             onClick={() => setAutoRefresh(!autoRefresh)}
@@ -1061,9 +1060,11 @@ function ServiceLogs({ serviceId }: { serviceId: string }) {
 
       <pre
         ref={logRef}
-        className="bg-black/60 border border-white/10 rounded-lg p-4 text-[11px] text-white/60 font-mono max-h-[500px] overflow-auto whitespace-pre-wrap scroll-smooth leading-5"
+        className="bg-black/80 border border-white/10 rounded-lg p-4 text-[11px] text-white/60 font-mono max-h-[500px] overflow-auto whitespace-pre-wrap scroll-smooth leading-5"
       >
-        {isLoading ? 'Loading logs...' : data?.logs || 'No logs available'}
+        {isLoading ? 'Loading logs...' : isError ? (
+          <span className="text-danger-400">Error: {(error as any)?.message || 'No manager node available'}</span>
+        ) : (data?.logs?.join('\n') || 'No logs available')}
       </pre>
     </div>
   );

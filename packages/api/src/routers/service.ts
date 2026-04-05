@@ -169,6 +169,10 @@ export const serviceRouter = createRouter({
       // Strip non-DB fields before insert
       const { replicasPerNode: _rpn, deployNodeIds: _dni, ...dbInput } = input;
 
+      if (dbInput.gitUrl) {
+        dbInput.gitUrl = dbInput.gitUrl.trim().replace(/\.git$/, '').replace(/\/$/, '');
+      }
+
       const { encryptEnvVars } = await import('../crypto');
       const envVars = encryptEnvVars(dbInput.envVars);
 
@@ -194,6 +198,10 @@ export const serviceRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, replicasPerNode, ...data } = input;
+
+      if (data.gitUrl) {
+        data.gitUrl = data.gitUrl.trim().replace(/\.git$/, '').replace(/\/$/, '');
+      }
 
       // Verify ownership
       const existing = await ctx.db.query.services.findFirst({
@@ -481,17 +489,17 @@ export const serviceRouter = createRouter({
     }),
 
   /** Get live logs for a running service */
-  logs: protectedProcedure
-    .input(z.object({ id: z.string().uuid(), tail: z.number().int().min(10).max(500).default(100) }))
+  getLogs: protectedProcedure
+    .input(z.object({ serviceId: z.string().uuid(), tail: z.number().default(100) }))
     .query(async ({ ctx, input }) => {
       const service = await ctx.db.query.services.findFirst({
-        where: eq(services.id, input.id),
+        where: eq(services.id, input.serviceId),
         with: { project: true },
       });
       if (!service || service.project.organizationId !== ctx.session.organizationId) {
         throw new Error('Service not found');
       }
-      if (!service.swarmServiceId) return { logs: 'No active deployment — no logs available.' };
+      if (!service.swarmServiceId) return { logs: ['No active deployment — no logs available.'] };
 
       const { nodes: nodesTable } = await import('@click-deploy/database');
       const { sshManager } = await import('@click-deploy/docker');
@@ -501,14 +509,20 @@ export const serviceRouter = createRouter({
         where: and(eq(nodesTable.organizationId, ctx.session.organizationId), eq(nodesTable.role, 'manager'), eq(nodesTable.status, 'online')),
         with: { sshKey: true },
       });
-      if (!managerNode?.sshKey) throw new Error('No online manager node');
+      if (!managerNode?.sshKey) throw new Error('No manager node available');
 
       const sshConfig = { host: managerNode.tailscaleIp || managerNode.host, port: managerNode.port, username: managerNode.sshUser, privateKey: decryptPrivateKey(managerNode.sshKey.privateKey) };
       const serviceName = getSwarmServiceName(service.name);
-      const tail = Math.max(10, Math.min(500, input.tail)); // clamp to safe range
+      
+      const tail = Math.max(10, Math.min(1000, input.tail)); // clamp to safe range
 
-      const result = await sshManager.exec(sshConfig, `docker service logs --tail ${tail} --no-trunc ${serviceName} 2>&1`);
-      return { logs: result.stdout || result.stderr || 'No output' };
+      try {
+        const result = await sshManager.exec(sshConfig, `docker service logs ${service.swarmServiceId} --tail ${tail} --timestamps 2>&1`);
+        const lines = (result.stdout || result.stderr || '').trim().split('\n').filter(Boolean);
+        return { logs: lines.length > 0 ? lines : ['No logs available or service starting up...'] };
+      } catch (err: any) {
+        throw new Error(`Failed to fetch logs from manager node: ${err.message}`);
+      }
     }),
 
   /** Fetch live stats (CPU/Memory) for a service container */
