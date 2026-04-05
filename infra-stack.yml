@@ -36,11 +36,9 @@ services:
     ports:
       - target: 80
         published: 80
-        protocol: tcp
         mode: host
       - target: 443
         published: 443
-        protocol: tcp
         mode: host
     deploy:
       mode: global
@@ -53,34 +51,39 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.hostname == click-deploy]
     networks:
       - click-deploy-net
-
   s3-proxy:
     image: openresty/openresty:alpine
     volumes:
       - /opt/click-deploy/s3-proxy/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
-      - /opt/click-deploy/s3-proxy/certs:/etc/nginx/certs:ro
     deploy:
       replicas: 1
+      placement:
+        constraints: [node.hostname == click-deploy]
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.s3proxy.rule=Host(`htsgmthciflwefrippwf.supabase.co`)"
+        - "traefik.http.routers.s3proxy.entrypoints=web"
+        - "traefik.http.services.s3proxy.loadbalancer.server.port=80"
     networks:
-      click-deploy-net:
-        aliases:
-          - htsgmthciflwefrippwf.supabase.co
+      - click-deploy-net
 
   registry:
     image: registry:3
     environment:
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
       REGISTRY_STORAGE: s3
-      REGISTRY_STORAGE_S3_REGIONENDPOINT: https://htsgmthciflwefrippwf.supabase.co/storage/v1/s3
+      REGISTRY_STORAGE_S3_REGIONENDPOINT: http://htsgmthciflwefrippwf.supabase.co/storage/v1/s3
       REGISTRY_STORAGE_S3_ACCESSKEY: ${REGISTRY_STORAGE_S3_ACCESSKEY:?Set REGISTRY_STORAGE_S3_ACCESSKEY in .env}
       REGISTRY_STORAGE_S3_SECRETKEY: ${REGISTRY_STORAGE_S3_SECRETKEY:?Set REGISTRY_STORAGE_S3_SECRETKEY in .env}
       REGISTRY_STORAGE_S3_BUCKET: docker-registry
       REGISTRY_STORAGE_S3_REGION: ap-southeast-2
       REGISTRY_STORAGE_S3_FORCEPATHSTYLE: "true"
       REGISTRY_STORAGE_S3_V4AUTH: "true"
-      REGISTRY_STORAGE_S3_SECURE: "true"
+      REGISTRY_STORAGE_S3_SECURE: "false"
       REGISTRY_STORAGE_S3_SKIPVERIFY: "true"
       REGISTRY_STORAGE_REDIRECT_DISABLE: "true"
       REGISTRY_HTTP_SECRET: ${REGISTRY_HTTP_SECRET:-8eff648febc9fe8be11658a132dd9a5ab419b0f202a67416a7fb69b806e216ac}
@@ -88,12 +91,13 @@ services:
     ports:
       - target: 5000
         published: 5000
-        protocol: tcp
         mode: host
     deploy:
       replicas: 1
       placement:
         constraints: [node.hostname == click-deploy]
+    extra_hosts:
+      - "htsgmthciflwefrippwf.supabase.co:10.10.20.30"
     networks:
       - click-deploy-net
 

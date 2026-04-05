@@ -314,8 +314,13 @@ GITHUB_WEBHOOK_SECRET=${WEBHOOK_SECRET}
 # NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 # Cloudflare Tunnels (optional)
-# CLOUDFLARE_API_TOKEN=
+# CLOUDFLARE_TUNNEL_TOKEN=
 # CLOUDFLARE_ACCOUNT_ID=
+
+# Registry S3 Credentials (Required for High-Availability Registry)
+# REGISTRY_STORAGE_S3_ACCESSKEY=
+# REGISTRY_STORAGE_S3_SECRETKEY=
+REGISTRY_HTTP_SECRET=$(generate_secret)
 
 # Port (default 3000)
 PORT=${PORT}
@@ -325,6 +330,71 @@ EOF
   echo -e "${GREEN}✓ .env generated with secure secrets${NC}"
 else
   echo -e "${GREEN}✓ .env already exists, keeping existing config${NC}"
+fi
+
+# ── Swarm & Infrastructure Setup ─────────────────────────────
+# Initialize Swarm if not already a manager
+if ! docker info --format '{{.Swarm.LocalNodeState}}' | grep -q "active"; then
+  echo -e "${YELLOW}→ Initializing Docker Swarm...${NC}"
+  docker swarm init --advertise-addr $(hostname -I | awk '{print $1}') 2>/dev/null || docker swarm init
+  echo -e "${GREEN}✓ Swarm initialized${NC}"
+fi
+
+# Print Worker Join Token
+WORKER_TOKEN=$(docker swarm join-token -q worker 2>/dev/null | awk '{print $1}')
+MANAGER_IP=$(hostname -I | awk '{print $1}' | head -n 1)
+echo ""
+echo -e "${CYAN}→ To add worker nodes to this Swarm, run this on the workers:${NC}"
+echo -e "    docker swarm join --token ${WORKER_TOKEN} ${MANAGER_IP}:2377"
+echo ""
+
+# Create ingress network overlay
+if ! docker network ls | grep -q "click-deploy-net"; then
+  echo -e "${YELLOW}→ Creating click-deploy-net overlay network...${NC}"
+  docker network create -d overlay --attachable click-deploy-net
+  echo -e "${GREEN}✓ Network click-deploy-net created${NC}"
+fi
+
+# Set up S3 Proxy config
+echo -e "${BLUE}→ Setting up S3 Proxy Configuration...${NC}"
+mkdir -p "$INSTALL_DIR/s3-proxy"
+if [ -f "${SCRIPT_DIR}/s3-proxy-nginx.conf" ]; then
+  cp "${SCRIPT_DIR}/s3-proxy-nginx.conf" "$INSTALL_DIR/s3-proxy/nginx.conf"
+elif [ -f "s3-proxy-nginx.conf" ]; then
+  cp "s3-proxy-nginx.conf" "$INSTALL_DIR/s3-proxy/nginx.conf"
+else
+  curl -fsSL "${REPO_RAW}/s3-proxy-nginx.conf" -o "$INSTALL_DIR/s3-proxy/nginx.conf" 2>/dev/null || true
+fi
+
+# Deploy Infrastructure Stack
+if [ -f "${SCRIPT_DIR}/infra-stack.yml" ]; then
+  cp "${SCRIPT_DIR}/infra-stack.yml" "$INSTALL_DIR/infra-stack.yml"
+elif [ -f "infra-stack.yml" ]; then
+  cp "infra-stack.yml" "$INSTALL_DIR/infra-stack.yml"
+else
+  curl -fsSL "${REPO_RAW}/infra-stack.yml" -o "$INSTALL_DIR/infra-stack.yml" 2>/dev/null || true
+fi
+
+if [ -f "$INSTALL_DIR/infra-stack.yml" ] && [ -n "$(grep REGISTRY_STORAGE_S3_ACCESSKEY .env | grep -v '^#')" ]; then
+  echo -e "${BLUE}→ Deploying infrastructure services (Traefik, Registry, Proxies)...${NC}"
+  cd "$INSTALL_DIR" && set -a && source .env && set +a && docker stack deploy -c infra-stack.yml click-deploy
+else
+  echo -e "${YELLOW}⚠ S3 credentials not found in .env, skipping infra stack deployment.${NC}"
+fi
+
+# Configure Cloudflared Tunnel
+source "$INSTALL_DIR/.env" 2>/dev/null || true
+if [ -n "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+  if command -v cloudflared &> /dev/null; then
+    if ! systemctl status cloudflared &> /dev/null; then
+      echo -e "${YELLOW}→ Installing Cloudflared tunnel service...${NC}"
+      cloudflared service install "$CLOUDFLARE_TUNNEL_TOKEN"
+      systemctl start cloudflared
+      echo -e "${GREEN}✓ Cloudflared tunnel configured${NC}"
+    else
+      echo -e "${GREEN}✓ Cloudflared service already running${NC}"
+    fi
+  fi
 fi
 
 # ── Build & Start ────────────────────────────────────────────
