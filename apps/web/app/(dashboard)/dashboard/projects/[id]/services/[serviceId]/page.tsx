@@ -749,6 +749,8 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
   };
 
   const [autoDeploy, setAutoDeploy] = useState(service.autoDeploy ?? true);
+  const [gitUrl, setGitUrl] = useState(service.gitUrl || '');
+  const [gitBranch, setGitBranch] = useState(service.gitBranch || 'main');
   const [dockerfilePath, setDockerfilePath] = useState(service.dockerfilePath || '');
   const [dockerContext, setDockerContext] = useState(service.dockerContext || '.');
   const [buildNodeId, setBuildNodeId] = useState(service.buildNodeId || '');
@@ -759,6 +761,8 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
   // Re-sync local state when the service data changes (e.g., after refetch)
   useEffect(() => {
     setAutoDeploy(service.autoDeploy ?? true);
+    setGitUrl(service.gitUrl || '');
+    setGitBranch(service.gitBranch || 'main');
     setDockerfilePath(service.dockerfilePath || '');
     setDockerContext(service.dockerContext || '.');
     setBuildNodeId(service.buildNodeId || '');
@@ -789,6 +793,8 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
       replicas: totalReplicas,
       replicasPerNode,
       autoDeploy,
+      gitUrl: gitUrl || undefined,
+      gitBranch: gitBranch || 'main',
       dockerfilePath: dockerfilePath || 'Dockerfile',
       dockerContext: dockerContext || '.',
       buildNodeId: buildNodeId || undefined,
@@ -810,6 +816,18 @@ function ServiceSettings({ service, onSave }: { service: any; onSave: () => void
     <div className="glass-card p-5 max-w-xl">
       <h3 className="text-sm font-semibold mb-4">Service Settings</h3>
       <div className="space-y-4">
+        {/* Git Source */}
+        {service.sourceType === 'git' && (
+          <>
+            <FormField label="Git Repository URL">
+              <FormInput value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} placeholder="https://github.com/user/repo" />
+            </FormField>
+            <FormField label="Branch">
+              <FormInput value={gitBranch} onChange={(e) => setGitBranch(e.target.value)} placeholder="main" />
+            </FormField>
+          </>
+        )}
+
         {/* Build Node */}
         <FormField label="Build Node">
           <FormSelect value={buildNodeId} onChange={(e) => setBuildNodeId(e.target.value)}>
