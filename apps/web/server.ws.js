@@ -237,6 +237,23 @@ async function main() {
   const server = http.createServer((req, res) => {
     // Try serving static files with correct MIME types first
     if (serveStaticWithCorrectMime(req, res)) return;
+
+    // Override cache-control on HTML responses to prevent CF edge caching
+    // Next.js sets s-maxage=31536000 on prerendered pages, which tells
+    // Cloudflare to cache HTML for a year — disastrous if stale content
+    // gets cached (like the Dokploy->Click-Deploy transition).
+    const originalWriteHead = res.writeHead.bind(res);
+    res.writeHead = function(statusCode, ...args) {
+      const headers = typeof args[args.length - 1] === 'object' ? args[args.length - 1] : {};
+      const contentType = res.getHeader('content-type') || headers['content-type'] || '';
+      if (typeof contentType === 'string' && contentType.includes('text/html')) {
+        res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+        res.setHeader('CDN-Cache-Control', 'no-store');
+        res.setHeader('Cloudflare-CDN-Cache-Control', 'no-store');
+      }
+      return originalWriteHead(statusCode, ...args);
+    };
+
     // Fall through to Next.js for everything else
     handle(req, res);
   });
