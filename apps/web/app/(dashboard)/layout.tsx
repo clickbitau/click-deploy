@@ -27,6 +27,9 @@ import {
   XCircle,
   Lock,
   X,
+  Github,
+  LinkIcon,
+  Unlink,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { NotificationBell, ToastProvider } from '@/components/notification-bell';
@@ -245,6 +248,60 @@ function ProfileModal({ user, onClose, onUpdate, onSignOut }: {
 
   const updateProfileMutation = trpc.system.updateProfile.useMutation();
 
+  // ── Connected Accounts (GitHub) ──────────────────────────
+  const [githubLinked, setGithubLinked] = useState(false);
+  const [githubUsername, setGithubUsername] = useState<string | null>(null);
+  const [linkingGithub, setLinkingGithub] = useState(false);
+  const [unlinkingGithub, setUnlinkingGithub] = useState(false);
+
+  useEffect(() => {
+    const sb = getSupabaseBrowserClient();
+    if (!sb) return;
+    sb.auth.getUserIdentities().then(({ data }) => {
+      const ghIdentity = data?.identities?.find((i: any) => i.provider === 'github');
+      if (ghIdentity) {
+        setGithubLinked(true);
+        setGithubUsername(ghIdentity.identity_data?.user_name || ghIdentity.identity_data?.preferred_username || null);
+      }
+    });
+  }, []);
+
+  const handleLinkGithub = async () => {
+    const sb = getSupabaseBrowserClient();
+    if (!sb) return;
+    setLinkingGithub(true);
+    const { error } = await sb.auth.linkIdentity({
+      provider: 'github',
+      options: { redirectTo: `${window.location.origin}/dashboard` },
+    });
+    if (error) {
+      setFeedback({ type: 'error', msg: error.message });
+      setLinkingGithub(false);
+    }
+    // If successful, the user is redirected to GitHub OAuth
+  };
+
+  const handleUnlinkGithub = async () => {
+    const sb = getSupabaseBrowserClient();
+    if (!sb) return;
+    setUnlinkingGithub(true);
+    try {
+      const { data } = await sb.auth.getUserIdentities();
+      const ghIdentity = data?.identities?.find((i: any) => i.provider === 'github');
+      if (ghIdentity) {
+        const { error } = await sb.auth.unlinkIdentity(ghIdentity);
+        if (error) throw error;
+        setGithubLinked(false);
+        setGithubUsername(null);
+        setFeedback({ type: 'success', msg: 'GitHub account disconnected' });
+      }
+    } catch (err: any) {
+      setFeedback({ type: 'error', msg: err.message || 'Failed to unlink' });
+    } finally {
+      setUnlinkingGithub(false);
+    }
+  };
+
   const handleAvatarUpload = () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -399,6 +456,46 @@ function ProfileModal({ user, onClose, onUpdate, onSignOut }: {
               {changingPwd ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Lock className="w-3.5 h-3.5" />}
               {changingPwd ? 'Updating...' : 'Update Password'}
             </button>
+          </div>
+
+          {/* Connected Accounts */}
+          <div className="pt-3 border-t border-white/5">
+            <h3 className="text-xs font-semibold text-white/60 mb-3 flex items-center gap-1.5">
+              <LinkIcon className="w-3 h-3" /> Connected Accounts
+            </h3>
+            <p className="text-[10px] text-white/30 mb-3">
+              Link your GitHub account to log in with either method
+            </p>
+            <div className="flex items-center justify-between bg-white/[0.02] p-3 rounded-lg border border-white/5">
+              <div className="flex items-center gap-2.5">
+                <Github className="w-4 h-4 text-white" />
+                <div>
+                  <span className="text-xs font-medium text-white/80">GitHub</span>
+                  {githubLinked && githubUsername && (
+                    <span className="block text-[10px] text-emerald-400">@{githubUsername}</span>
+                  )}
+                </div>
+              </div>
+              {githubLinked ? (
+                <button
+                  onClick={handleUnlinkGithub}
+                  disabled={unlinkingGithub}
+                  className="px-3 py-1.5 text-[11px] font-semibold text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {unlinkingGithub ? <Loader2 className="w-3 h-3 animate-spin" /> : <Unlink className="w-3 h-3" />}
+                  Disconnect
+                </button>
+              ) : (
+                <button
+                  onClick={handleLinkGithub}
+                  disabled={linkingGithub}
+                  className="px-3 py-1.5 text-[11px] font-semibold bg-white/5 hover:bg-white/10 border border-white/10 rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {linkingGithub ? <Loader2 className="w-3 h-3 animate-spin" /> : <Github className="w-3 h-3" />}
+                  Connect GitHub
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Sign Out */}
