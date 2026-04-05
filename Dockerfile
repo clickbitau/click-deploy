@@ -99,8 +99,11 @@ COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
 
-# Install ws for WebSocket support in production
-RUN npm install --no-save ws ssh2
+# Copy WebSocket server wrapper
+COPY --from=builder /app/apps/web/server.ws.js ./server.ws.js
+
+# Install WebSocket dependencies for production
+RUN npm install --no-save ws ssh2 postgres
 
 # Copy package.json for version reads
 COPY --from=builder /app/package.json ./package.json
