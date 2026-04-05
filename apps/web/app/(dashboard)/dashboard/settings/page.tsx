@@ -37,6 +37,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import { useConfirm } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
+import { SmtpConfigForm } from '@/components/smtp-config-form';
 
 const tabs = [
   { id: 'infrastructure', label: 'Infrastructure', icon: Server },
@@ -1400,98 +1401,10 @@ function StorageTab() {
 }
 
 // ── SMTP Configuration Form ─────────────────────────────────
+// Implemented in @/components/smtp-config-form — shared with /dashboard/notifications
+// Re-exported here for backwards compatibility if referenced elsewhere.
+export { SmtpConfigForm };
 
-function SmtpConfigForm() {
-  const smtpQuery = trpc.system.getSmtp.useQuery();
-  const saveSmtp = trpc.system.saveSmtp.useMutation();
-  const testSmtp = trpc.system.testSmtp.useMutation();
-
-  const [host, setHost] = useState('');
-  const [port, setPort] = useState('587');
-  const [user, setUser] = useState('');
-  const [password, setPassword] = useState('');
-  const [from, setFrom] = useState('');
-  const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
-
-  useEffect(() => {
-    if (smtpQuery.data) {
-      setHost(smtpQuery.data.host);
-      setPort(smtpQuery.data.port);
-      setUser(smtpQuery.data.user);
-      setFrom(smtpQuery.data.from);
-    }
-  }, [smtpQuery.data]);
-
-  const handleSave = () => {
-    saveSmtp.mutate({ host, port, user, password, from }, {
-      onSuccess: () => smtpQuery.refetch(),
-    });
-  };
-
-  const handleTest = () => {
-    setTestResult(null);
-    testSmtp.mutate({ host, port, user, password, from }, {
-      onSuccess: (res) => setTestResult(res),
-    });
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1 block">SMTP Host</label>
-          <input value={host} onChange={e => setHost(e.target.value)} placeholder="smtp.gmail.com"
-            className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white/80 placeholder:text-white/20 focus:border-brand-500/50 outline-none" />
-        </div>
-        <div>
-          <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1 block">Port</label>
-          <input value={port} onChange={e => setPort(e.target.value)} placeholder="587"
-            className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white/80 placeholder:text-white/20 focus:border-brand-500/50 outline-none" />
-        </div>
-      </div>
-      <div>
-        <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1 block">Username / Email</label>
-        <input value={user} onChange={e => setUser(e.target.value)} placeholder="you@gmail.com"
-          className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white/80 placeholder:text-white/20 focus:border-brand-500/50 outline-none" />
-      </div>
-      <div>
-        <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1 block">Password / App Password</label>
-        <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter password" type="password"
-          className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white/80 placeholder:text-white/20 focus:border-brand-500/50 outline-none" />
-      </div>
-      <div>
-        <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1 block">From Address (optional)</label>
-        <input value={from} onChange={e => setFrom(e.target.value)} placeholder="noreply@yourdomain.com"
-          className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white/80 placeholder:text-white/20 focus:border-brand-500/50 outline-none" />
-      </div>
-
-      {testResult && (
-        <div className={`text-xs px-3 py-2 rounded-lg ${testResult.success ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-          {testResult.success ? '✓ Test email sent successfully!' : `✗ ${testResult.error}`}
-        </div>
-      )}
-
-      <div className="flex items-center gap-2 pt-2">
-        <button onClick={handleTest} disabled={!host || !user || !password || testSmtp.isPending}
-          className="px-4 py-2 rounded-lg border border-white/10 text-xs text-white/60 hover:bg-white/5 transition-colors disabled:opacity-50 flex items-center gap-2">
-          {testSmtp.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
-          Send Test Email
-        </button>
-        <button onClick={handleSave} disabled={!host || !user || !password || saveSmtp.isPending}
-          className="btn-primary flex items-center gap-2 disabled:opacity-50">
-          {saveSmtp.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          {saveSmtp.isPending ? 'Saving...' : 'Save SMTP Settings'}
-        </button>
-      </div>
-
-      {smtpQuery.data?.configured && (
-        <p className="text-[10px] text-emerald-400/60 flex items-center gap-1">
-          <CheckCircle className="w-3 h-3" /> SMTP is configured
-        </p>
-      )}
-    </div>
-  );
-}
 
 // ── Team Tab ────────────────────────────────────────────────
 

@@ -14,11 +14,13 @@ import {
   Loader2,
   Zap,
   Clock,
+  Settings2,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
 import { useConfirm } from '@/components/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
+import { SmtpConfigForm } from '@/components/smtp-config-form';
 
 const typeIcons: Record<string, typeof MessageSquare> = {
   slack: MessageSquare,
@@ -56,7 +58,7 @@ export default function NotificationsPage() {
   const deleteChannel = trpc.notification.deleteChannel.useMutation();
 
   const [showAdd, setShowAdd] = useState(false);
-  const [tab, setTab] = useState<'channels' | 'activity'>('channels');
+  const [tab, setTab] = useState<'channels' | 'activity' | 'smtp'>('channels');
   const confirm = useConfirm();
 
   const handleToggle = (id: string) => {
@@ -76,23 +78,30 @@ export default function NotificationsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Notifications</h1>
           <p className="text-sm text-white/40 mt-1">Configure deployment and system notification channels</p>
         </div>
-        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2">
-          <Plus className="w-4 h-4" />
-          Add Channel
-        </button>
+        {tab === 'channels' && (
+          <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2">
+            <Plus className="w-4 h-4" />
+            Add Channel
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 bg-white/[0.03] p-1 rounded-lg w-fit">
-        {(['channels', 'activity'] as const).map((t) => (
+        {([
+          { id: 'channels', label: 'Channels', icon: Bell },
+          { id: 'activity', label: 'Activity Log', icon: Clock },
+          { id: 'smtp',     label: 'SMTP Settings', icon: Mail },
+        ] as const).map(({ id, label, icon: Icon }) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-1.5 rounded-md text-xs font-medium transition-colors capitalize ${
-              tab === t ? 'bg-brand-500/20 text-brand-400' : 'text-white/40 hover:text-white/60'
+            key={id}
+            onClick={() => setTab(id)}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              tab === id ? 'bg-brand-500/20 text-brand-400' : 'text-white/40 hover:text-white/60'
             }`}
           >
-            {t === 'activity' ? 'Activity Log' : t}
+            <Icon className="w-3.5 h-3.5" />
+            {label}
           </button>
         ))}
       </div>
@@ -234,6 +243,22 @@ export default function NotificationsPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── SMTP Settings Tab ─────────────────────────── */}
+      {tab === 'smtp' && (
+        <div className="glass-card p-6 max-w-xl">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-9 h-9 rounded-xl bg-brand-500/10 flex items-center justify-center">
+              <Mail className="w-5 h-5 text-brand-400" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold">SMTP / Email Settings</h2>
+              <p className="text-[11px] text-white/30 mt-0.5">Configure the email provider used for deployment alerts and team invitations</p>
+            </div>
+          </div>
+          <SmtpConfigForm />
         </div>
       )}
 

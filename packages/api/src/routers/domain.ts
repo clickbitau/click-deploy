@@ -4,10 +4,12 @@
 // Manages domain → service routing.
 // When a domain is added/removed, updates Traefik labels
 // on the running Swarm service for live routing changes.
+// When sslProvider is 'cloudflare', also provisions the
+// Cloudflare Tunnel public hostname + DNS CNAME automatically.
 // ============================================================
 import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
-import { domains, services, projects, nodes, sshKeys } from '@click-deploy/database';
+import { domains, services, projects, nodes, sshKeys, tunnels } from '@click-deploy/database';
 import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
 import {
   TraefikManager,
@@ -15,6 +17,11 @@ import {
   type TraefikRouteConfig,
 } from '@click-deploy/docker';
 import { decryptPrivateKey } from '../crypto';
+import {
+  provisionDomainViaTunnel,
+  deprovisionDomainFromTunnel,
+  lookupZoneId,
+} from '../cloudflare';
 
 export const domainRouter = createRouter({
   /** List all domains for a service */
@@ -61,7 +68,7 @@ export const domainRouter = createRouter({
     );
   }),
 
-  /** Add a domain to a service — auto-configures Traefik routing */
+  /** Add a domain to a service — auto-configures Traefik routing + optional CF Tunnel */
   create: adminProcedure
     .input(z.object({
       serviceId: z.string().uuid(),
@@ -89,15 +96,67 @@ export const domainRouter = createRouter({
         .values(input)
         .returning();
 
+      // Determine if we should provision via Cloudflare Tunnel
+      const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+      const envTunnelId = process.env.CLOUDFLARE_TUNNEL_ID;
+      const envAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+
+      const shouldUseTunnel =
+        input.sslProvider === 'cloudflare' ||
+        (!!envTunnelId && !!envAccountId && !!apiToken);
+
+      let cfResult: { cname: string; zoneId: string | null; dnsCreated: boolean } | null = null;
+
+      if (shouldUseTunnel && apiToken) {
+        // Resolve the tunnel ID: prefer explicit tunnelId arg, then env, then DB tunnel for org
+        let resolvedTunnelId = envTunnelId;
+        let resolvedAccountId = envAccountId;
+
+        if (input.tunnelId) {
+          const dbTunnel = await ctx.db.query.tunnels.findFirst({
+            where: and(
+              eq(tunnels.id, input.tunnelId),
+              eq(tunnels.organizationId, ctx.session.organizationId),
+            ),
+          });
+          if (dbTunnel?.cloudflareTunnelId && dbTunnel?.cloudflareAccountId) {
+            resolvedTunnelId = dbTunnel.cloudflareTunnelId;
+            resolvedAccountId = dbTunnel.cloudflareAccountId;
+          }
+        } else if (!resolvedTunnelId) {
+          // Auto-detect first tunnel for org
+          const orgTunnel = await ctx.db.query.tunnels.findFirst({
+            where: eq(tunnels.organizationId, ctx.session.organizationId),
+          });
+          if (orgTunnel?.cloudflareTunnelId && orgTunnel?.cloudflareAccountId) {
+            resolvedTunnelId = orgTunnel.cloudflareTunnelId;
+            resolvedAccountId = orgTunnel.cloudflareAccountId;
+          }
+        }
+
+        if (resolvedTunnelId && resolvedAccountId) {
+          cfResult = await provisionDomainViaTunnel({
+            apiToken,
+            accountId: resolvedAccountId,
+            tunnelId: resolvedTunnelId,
+            hostname: input.hostname,
+            originService: 'http://localhost:80', // Traefik on host:80
+          }).catch((err) => {
+            console.error('[domain] CF tunnel provisioning failed:', err);
+            return null;
+          });
+        }
+      }
+
       // Update Traefik labels on the running Swarm service (fire-and-forget)
       updateTraefikForService(ctx.db, service.id, ctx.session.organizationId).catch((err) => {
         console.error('[domain] Failed to update Traefik labels:', err);
       });
 
-      return domain;
+      return { ...domain, cloudflare: cfResult };
     }),
 
-  /** Delete a domain — removes Traefik routing */
+  /** Delete a domain — removes Traefik routing + CF Tunnel hostname */
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -106,6 +165,7 @@ export const domainRouter = createRouter({
         where: eq(domains.id, input.id),
         with: {
           service: { with: { project: true } },
+          tunnel: true,
         },
       });
 
@@ -115,6 +175,31 @@ export const domainRouter = createRouter({
 
       const serviceId = domain.serviceId;
 
+      // Deprovision from Cloudflare Tunnel (best-effort)
+      const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+      const envTunnelId = process.env.CLOUDFLARE_TUNNEL_ID;
+      const envAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+
+      if (apiToken) {
+        let tunnelId = domain.tunnel?.cloudflareTunnelId ?? null;
+        let accountId = domain.tunnel?.cloudflareAccountId ?? null;
+
+        // Fall back to env-configured global tunnel
+        if (!tunnelId && envTunnelId && envAccountId) {
+          tunnelId = envTunnelId;
+          accountId = envAccountId;
+        }
+
+        if (tunnelId && accountId) {
+          deprovisionDomainFromTunnel({
+            apiToken,
+            accountId,
+            tunnelId,
+            hostname: domain.hostname,
+          }).catch((err) => console.warn('[domain] CF deprovision error:', err));
+        }
+      }
+
       await ctx.db.delete(domains).where(eq(domains.id, input.id));
 
       // Update Traefik labels on the running Swarm service (fire-and-forget)
@@ -123,6 +208,51 @@ export const domainRouter = createRouter({
       });
 
       return { success: true };
+    }),
+
+  /**
+   * Check the live DNS status of a hostname.
+   * Returns whether the hostname is:  
+   *   - pointed to our CF tunnel CNAME (.cfargotunnel.com)
+   *   - pointed to a direct IP (A record mode)
+   *   - unresolvable (not configured yet)
+   */
+  checkDns: protectedProcedure
+    .input(z.object({ hostname: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+      if (!apiToken) return { status: 'unknown' as const, message: 'Cloudflare API not configured' };
+
+      try {
+        const zoneId = await lookupZoneId(apiToken, input.hostname);
+        if (!zoneId) {
+          return { status: 'not_in_cloudflare' as const, message: 'Domain zone not found in your Cloudflare account' };
+        }
+
+        // Query CF DNS API
+        const res = await fetch(
+          `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?name=${encodeURIComponent(input.hostname)}`,
+          { headers: { Authorization: `Bearer ${apiToken}` } },
+        );
+        const json: any = await res.json();
+        const records: any[] = json.result ?? [];
+
+        const cname = records.find((r: any) => r.type === 'CNAME');
+        const aRecord = records.find((r: any) => r.type === 'A');
+
+        const envTunnelId = process.env.CLOUDFLARE_TUNNEL_ID;
+        if (cname && envTunnelId && cname.content === `${envTunnelId}.cfargotunnel.com`) {
+          return { status: 'tunnel_ok' as const, message: `✓ CNAME → ${cname.content}` };
+        } else if (cname) {
+          return { status: 'cname_other' as const, message: `CNAME → ${cname.content}` };
+        } else if (aRecord) {
+          return { status: 'a_record' as const, message: `A → ${aRecord.content}` };
+        } else {
+          return { status: 'no_record' as const, message: 'No DNS record found' };
+        }
+      } catch (err: any) {
+        return { status: 'error' as const, message: err.message };
+      }
     }),
 });
 

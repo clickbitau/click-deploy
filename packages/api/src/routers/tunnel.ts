@@ -8,6 +8,17 @@ import { createRouter, protectedProcedure, adminProcedure } from '../trpc';
 import * as crypto from 'crypto';
 import { SwarmManager } from '@click-deploy/docker';
 import { decryptPrivateKey } from '../crypto';
+import {
+  addTunnelHostname,
+  removeTunnelHostname,
+  upsertTunnelCname,
+  deleteTunnelCname,
+  lookupZoneId,
+  setZoneSslMode,
+  provisionDomainViaTunnel,
+  deprovisionDomainFromTunnel,
+  getTunnelConfig,
+} from '../cloudflare';
 
 export const tunnelRouter = createRouter({
   /** List tunnels for org */
@@ -187,12 +198,13 @@ networks:
       return tunnel;
     }),
 
-  /** Add a route to a tunnel */
+  /** Add a route to a tunnel — fully automates CF API + DNS */
   addRoute: adminProcedure
     .input(z.object({
       tunnelId: z.string().uuid(),
       hostname: z.string().min(1).max(255),
-      service: z.string().min(1).max(500), // e.g., "http://traefik:80"
+      /** Target origin service. Defaults to http://localhost:80 (Traefik). */
+      service: z.string().min(1).max(500).default('http://localhost:80'),
     }))
     .mutation(async ({ ctx, input }) => {
       // Verify tunnel ownership
@@ -204,30 +216,97 @@ networks:
       });
 
       if (!tunnel) throw new Error('Tunnel not found');
+      if (!tunnel.cloudflareTunnelId || !tunnel.cloudflareAccountId) {
+        throw new Error('Tunnel has no Cloudflare credentials — was it created via the API?');
+      }
 
-      // TODO: Update Cloudflare tunnel config via API
-      // TODO: Create CNAME DNS record
+      const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+      if (!apiToken) throw new Error('CLOUDFLARE_API_TOKEN is not configured');
 
+      // 1. Add public hostname to cloudflared tunnel config (PUT)
+      await addTunnelHostname(
+        apiToken,
+        tunnel.cloudflareAccountId,
+        tunnel.cloudflareTunnelId,
+        input.hostname,
+        input.service,
+      );
+
+      // 2. Upsert CNAME DNS record (best-effort, zone may be in different account)
+      let dnsCreated = false;
+      let zoneId: string | null = null;
+      try {
+        zoneId = await lookupZoneId(apiToken, input.hostname);
+        if (zoneId) {
+          await upsertTunnelCname(apiToken, zoneId, input.hostname, tunnel.cloudflareTunnelId);
+          await setZoneSslMode(apiToken, zoneId, 'full');
+          dnsCreated = true;
+        }
+      } catch (err) {
+        console.warn(`[tunnel.addRoute] DNS provisioning skipped for ${input.hostname}:`, err);
+      }
+
+      // 3. Persist to database
       const [route] = await ctx.db
         .insert(tunnelRoutes)
-        .values(input)
+        .values({
+          tunnelId: input.tunnelId,
+          hostname: input.hostname,
+          service: input.service,
+        })
         .returning();
 
-      return route;
+      return { ...route, dnsCreated, zoneId };
     }),
 
-  /** Remove a route from a tunnel */
+  /** Remove a route from a tunnel — removes CF config + DNS */
   removeRoute: adminProcedure
     .input(z.object({ routeId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      // TODO: Remove from Cloudflare tunnel config
-      // TODO: Remove DNS record
+      // Get route details before deleting
+      const route = await ctx.db.query.tunnelRoutes.findFirst({
+        where: eq(tunnelRoutes.id, input.routeId),
+        with: { tunnel: true },
+      });
+
+      if (!route || route.tunnel.organizationId !== ctx.session.organizationId) {
+        throw new Error('Route not found');
+      }
+
+      const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+      if (apiToken && route.tunnel.cloudflareTunnelId && route.tunnel.cloudflareAccountId) {
+        await deprovisionDomainFromTunnel({
+          apiToken,
+          accountId: route.tunnel.cloudflareAccountId,
+          tunnelId: route.tunnel.cloudflareTunnelId,
+          hostname: route.hostname,
+        }).catch((err) => console.warn('[tunnel.removeRoute] CF cleanup error:', err));
+      }
 
       await ctx.db
         .delete(tunnelRoutes)
         .where(eq(tunnelRoutes.id, input.routeId));
 
       return { success: true };
+    }),
+
+  /** Read live tunnel configuration from Cloudflare API */
+  getLiveConfig: protectedProcedure
+    .input(z.object({ tunnelId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const tunnel = await ctx.db.query.tunnels.findFirst({
+        where: and(
+          eq(tunnels.id, input.tunnelId),
+          eq(tunnels.organizationId, ctx.session.organizationId),
+        ),
+      });
+      if (!tunnel) throw new Error('Tunnel not found');
+      if (!tunnel.cloudflareTunnelId || !tunnel.cloudflareAccountId) return [];
+
+      const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+      if (!apiToken) throw new Error('CLOUDFLARE_API_TOKEN not configured');
+
+      return getTunnelConfig(apiToken, tunnel.cloudflareAccountId, tunnel.cloudflareTunnelId);
     }),
 
   /** Delete a tunnel entirely */

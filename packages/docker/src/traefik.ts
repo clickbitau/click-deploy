@@ -172,7 +172,7 @@ export class TraefikManager {
       // Update existing Traefik service
       const updateCmd = [
         `docker service update`,
-        `--image traefik:latest`,
+        `--image traefik:v2.11`,
         `--force`,
         serviceName,
       ].join(' ');
@@ -201,8 +201,8 @@ export class TraefikManager {
       `docker service create`,
       `--name ${serviceName}`,
       `--constraint 'node.role == manager'`,
-      `--publish ${httpPort}:80`,
-      `--publish ${httpsPort}:443`,
+      `--publish published=${httpPort},target=80,mode=host`,
+      `--publish published=${httpsPort},target=443,mode=host`,
       // Traefik dashboard is only accessible internally, not published publicly
       `--mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly`,
       `--mount type=volume,source=click-deploy-traefik-certs,target=/letsencrypt`,
@@ -210,7 +210,7 @@ export class TraefikManager {
       // Labels for Traefik's own dashboard (optional)
       `--label traefik.enable=false`,
       // Traefik image with CLI args
-      `traefik:latest`,
+      `traefik:v2.11`,
       // -- Traefik CLI arguments --
       `--api.dashboard=${dashboardEnabled}`,
       `--api.insecure=false`,
@@ -221,11 +221,12 @@ export class TraefikManager {
       // Global HTTP → HTTPS redirect
       `--entrypoints.web.http.redirections.entrypoint.to=websecure`,
       `--entrypoints.web.http.redirections.entrypoint.scheme=https`,
-      // Docker Swarm provider
-      `--providers.swarm=true`,
-      `--providers.swarm.exposedByDefault=false`,
-      `--providers.swarm.network=click-deploy-net`,
-      `--providers.swarm.endpoint=unix:///var/run/docker.sock`,
+      // Docker Swarm provider (Traefik v2 notation)
+      `--providers.docker=true`,
+      `--providers.docker.swarmMode=true`,
+      `--providers.docker.exposedByDefault=false`,
+      `--providers.docker.network=click-deploy-net`,
+      `--providers.docker.endpoint=unix:///var/run/docker.sock`,
       // Let's Encrypt ACME
       `--certificatesresolvers.letsencrypt.acme.email=${config.acmeEmail}`,
       `--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json`,
@@ -274,7 +275,7 @@ export class TraefikManager {
     if (version === 'latest' || version === 'unknown') {
       try {
         const versionCmd = await sshManager.exec(this.sshConfig,
-          `docker image inspect traefik:latest --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null`
+          `docker image inspect traefik:v2.11 --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null`
         );
         const actualVersion = versionCmd.stdout.trim();
         if (actualVersion && actualVersion !== '' && actualVersion !== '<no value>') {

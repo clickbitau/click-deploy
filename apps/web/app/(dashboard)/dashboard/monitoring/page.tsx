@@ -13,9 +13,14 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  Heart,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { EmptyState } from '@/components/empty-state';
+import { formatDistanceToNow, differenceInSeconds } from 'date-fns';
+
 
 function ProgressRing({ value, size = 80, stroke = 6, color = '#22d3ee' }: { value: number; size?: number; stroke?: number; color?: string }) {
   const radius = (size - stroke) / 2;
@@ -89,6 +94,12 @@ export default function MonitoringPage() {
 
   const ringColor = (pct: number) => pct > 80 ? '#ef4444' : pct > 60 ? '#f59e0b' : '#22d3ee';
 
+  // Heartbeat monitor health: alive if any node was updated < 90s ago
+  const heartbeatAlive = allNodes.some((n: any) => {
+    if (!n.lastHeartbeatAt) return false;
+    return differenceInSeconds(new Date(), new Date(n.lastHeartbeatAt)) < 90;
+  });
+
   return (
     <div>
       {/* Header */}
@@ -98,6 +109,15 @@ export default function MonitoringPage() {
           <p className="text-sm text-white/40 mt-1">Real-time resource monitoring and cluster health</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Heartbeat Monitor Pulse */}
+          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-medium transition-colors ${
+            heartbeatAlive
+              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+              : 'bg-white/5 border-white/10 text-white/30'
+          }`}>
+            <Heart className={`w-3 h-3 ${heartbeatAlive ? 'animate-pulse' : ''}`} />
+            {heartbeatAlive ? 'Monitor Active' : 'Awaiting Heartbeat'}
+          </div>
           <span className="text-[11px] text-white/25 flex items-center gap-1.5">
             <span className="status-dot status-running" style={{ width: 6, height: 6 }} />
             Live · Updated {timeStr}
@@ -290,6 +310,162 @@ export default function MonitoringPage() {
             })}
           </div>
         )}
+      </div>
+
+      {/* ── System Health / Heartbeat Table ──────────────── */}
+      <div className="glass-card mt-6">
+        <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <Heart className="w-4 h-4 text-brand-400" />
+              System Health
+            </h2>
+            <p className="text-[11px] text-white/30 mt-0.5">Last successful heartbeat run for every node in the cluster (updated every 60s)</p>
+          </div>
+          <div className={`flex items-center gap-1.5 text-[10px] font-medium ${
+            heartbeatAlive ? 'text-emerald-400' : 'text-white/30'
+          }`}>
+            {heartbeatAlive
+              ? <CheckCircle2 className="w-3.5 h-3.5" />
+              : <Clock className="w-3.5 h-3.5" />
+            }
+            {heartbeatAlive ? 'Background monitor running' : 'Waiting for first cycle'}
+          </div>
+        </div>
+
+        {isLoading && (
+          <div className="p-5 space-y-3">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="h-12 bg-white/5 rounded animate-pulse" />
+            ))}
+          </div>
+        )}
+
+        {!isLoading && allNodes.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-14">
+            <Heart className="w-8 h-8 text-white/10 mb-3" />
+            <p className="text-sm text-white/30">No nodes registered</p>
+          </div>
+        )}
+
+        {!isLoading && allNodes.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-white/5">
+                  <th className="px-5 py-3 text-left text-[10px] text-white/30 uppercase tracking-wider font-medium">Node</th>
+                  <th className="px-5 py-3 text-left text-[10px] text-white/30 uppercase tracking-wider font-medium">Role</th>
+                  <th className="px-5 py-3 text-left text-[10px] text-white/30 uppercase tracking-wider font-medium">Status</th>
+                  <th className="px-5 py-3 text-left text-[10px] text-white/30 uppercase tracking-wider font-medium">Last Heartbeat</th>
+                  <th className="px-5 py-3 text-left text-[10px] text-white/30 uppercase tracking-wider font-medium">Age</th>
+                  <th className="px-5 py-3 text-left text-[10px] text-white/30 uppercase tracking-wider font-medium">Health</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/[0.03]">
+                {allNodes.map((node: any) => {
+                  const lastBeat = node.lastHeartbeatAt ? new Date(node.lastHeartbeatAt) : null;
+                  const ageSeconds = lastBeat ? differenceInSeconds(new Date(), lastBeat) : Infinity;
+                  const isStale = ageSeconds > 90;  // > 1.5x interval = missed a cycle
+                  const isVeryStale = ageSeconds > 300; // > 5 min = critically stale
+
+                  const statusColor = node.status === 'online'
+                    ? 'text-emerald-400' : node.status === 'offline'
+                    ? 'text-danger-400' : 'text-warning-500';
+
+                  const HealthIcon = isVeryStale
+                    ? XCircle
+                    : isStale
+                    ? AlertTriangle
+                    : CheckCircle2;
+
+                  const healthColor = isVeryStale
+                    ? 'text-danger-400'
+                    : isStale
+                    ? 'text-warning-500'
+                    : 'text-emerald-400';
+
+                  const healthLabel = isVeryStale
+                    ? 'Missed ≥5 cycles'
+                    : isStale
+                    ? 'Heartbeat delayed'
+                    : 'Healthy';
+
+                  return (
+                    <tr key={node.id} className="hover:bg-white/[0.02] transition-colors">
+                      {/* Node name */}
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <Server className="w-3.5 h-3.5 text-white/20 shrink-0" />
+                          <span className="font-medium text-white/80">{node.name}</span>
+                        </div>
+                        {node.tailscaleIp && (
+                          <p className="text-[9px] text-white/20 font-mono mt-0.5 ml-5">{node.tailscaleIp}</p>
+                        )}
+                      </td>
+
+                      {/* Role */}
+                      <td className="px-5 py-3.5">
+                        <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-white/5 text-white/40">
+                          {node.role}
+                        </span>
+                      </td>
+
+                      {/* Status */}
+                      <td className="px-5 py-3.5">
+                        <span className={`flex items-center gap-1.5 font-medium capitalize ${statusColor}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            node.status === 'online' ? 'bg-emerald-500 shadow-[0_0_4px_#10b981]'
+                            : node.status === 'offline' ? 'bg-danger-500'
+                            : 'bg-warning-500'
+                          }`} />
+                          {node.status}
+                        </span>
+                      </td>
+
+                      {/* Last heartbeat timestamp */}
+                      <td className="px-5 py-3.5">
+                        {lastBeat ? (
+                          <span className="font-mono text-white/60">
+                            {lastBeat.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          </span>
+                        ) : (
+                          <span className="text-white/20">Never</span>
+                        )}
+                      </td>
+
+                      {/* Age */}
+                      <td className="px-5 py-3.5">
+                        {lastBeat ? (
+                          <span className={isStale ? 'text-warning-500' : 'text-white/50'}>
+                            {formatDistanceToNow(lastBeat, { addSuffix: true })}
+                          </span>
+                        ) : (
+                          <span className="text-white/20">—</span>
+                        )}
+                      </td>
+
+                      {/* Health indicator */}
+                      <td className="px-5 py-3.5">
+                        <span className={`flex items-center gap-1.5 ${healthColor}`}>
+                          <HealthIcon className="w-3.5 h-3.5" />
+                          {healthLabel}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Footer: heartbeat interval note */}
+        <div className="px-5 py-3 border-t border-white/5 flex items-center gap-2">
+          <Clock className="w-3 h-3 text-white/20" />
+          <span className="text-[10px] text-white/20">
+            Heartbeat polls every 60s · Offline after 3 consecutive failures (≈3 min)
+          </span>
+        </div>
       </div>
     </div>
   );

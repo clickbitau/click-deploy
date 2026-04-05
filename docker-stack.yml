@@ -1,0 +1,126 @@
+# ============================================================
+# Click-Deploy — Production Docker Swarm Stack
+# ============================================================
+# Replaces `docker compose up` for HA deployments.
+#
+# PREREQUISITES:
+#   1. Build and push the image to your registry first:
+#        docker build -t ${REGISTRY:-localhost:5000}/click-deploy/app:${TAG:-latest} .
+#        docker push ${REGISTRY:-localhost:5000}/click-deploy/app:${TAG:-latest}
+#
+#   2. Ensure the overlay network exists:
+#        docker network create --driver overlay --attachable click-deploy-net
+#
+#   3. Create the .env or export all required env vars as Swarm secrets/configs
+#
+# DEPLOY:
+#   export REGISTRY=<your-registry>:<port>
+#   export TAG=$(git rev-parse --short HEAD)
+#   docker stack deploy -c docker-stack.yml --with-registry-auth click-deploy
+#
+# SCALE:
+#   docker service scale click-deploy_app=3
+#
+# STATUS:
+#   docker service ps click-deploy_app
+# ============================================================
+
+version: "3.9"
+
+services:
+  # ── One-shot: run DB migrations before app replicas start ──
+  # Uses rolling-update hook — only runs on fresh deploy
+  db-migrate:
+    image: ${REGISTRY:-localhost:5000}/click-deploy/app:${TAG:-latest}
+    command:
+      - sh
+      - -c
+      - |
+        cd /app/packages/database && \
+        npx drizzle-kit push --force && \
+        ([ -f /app/scripts/post-migrate.sh ] && sh /app/scripts/post-migrate.sh || true)
+    networks:
+      - click-deploy-net
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        max_attempts: 1
+      placement:
+        constraints:
+          - node.role == manager
+    # Migrate runs once then exits — Swarm doesn't restart on-exit
+
+  # ── Click-Deploy Web App (replicated, HA) ─────────────────
+  app:
+    image: ${REGISTRY:-localhost:5000}/click-deploy/app:${TAG:-latest}
+    networks:
+      - click-deploy-net
+    ports:
+      # Expose on the overlay so Traefik/Cloudflare Tunnel can reach the VIP
+      - target: 3000
+        published: 3000
+        protocol: tcp
+        mode: ingress
+    environment:
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      DATABASE_URL: ${DATABASE_URL}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      NODE_ENV: production
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 15s
+        # Start new replica BEFORE stopping old one — zero-downtime
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      placement:
+        constraints:
+          # Run on manager or worker nodes only — not dedicated build nodes
+          - node.labels.role != build
+        preferences:
+          # Spread replicas across availability zones / nodes for true HA
+          - spread: node.id
+      labels:
+        # ── Traefik routing (mode=host, existing Swarm mesh) ──
+        - "traefik.enable=true"
+        - "traefik.http.routers.click-deploy-app.rule=Host(`${DASHBOARD_HOST:-deploy.clickbit.com.au}`)"
+        - "traefik.http.routers.click-deploy-app.entrypoints=websecure"
+        - "traefik.http.routers.click-deploy-app.tls=true"
+        - "traefik.http.services.click-deploy-app.loadbalancer.server.port=3000"
+        # Sticky sessions on the dashboard (better-auth cookies)
+        - "traefik.http.services.click-deploy-app.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.click-deploy-app.loadbalancer.sticky.cookie.name=cd_node"
+        - "traefik.http.services.click-deploy-app.loadbalancer.sticky.cookie.httponly=true"
+        - "traefik.http.services.click-deploy-app.loadbalancer.sticky.cookie.secure=true"
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+networks:
+  click-deploy-net:
+    # Attach to the existing overlay network already used by Traefik
+    external: true
