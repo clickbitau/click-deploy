@@ -42,6 +42,7 @@ interface DeploymentContext {
     gitBranch: string | null;
     dockerfilePath: string | null;
     dockerContext: string | null;
+    dockerBuildStage: string | null;
     sourceType: string;
     composeFile: string | null;
     imageName: string | null;
@@ -56,6 +57,13 @@ interface DeploymentContext {
     projectId: string;
     deployNodeIds: string[];
     volumes: Array<{ type?: string; name: string; mountPath: string }>;
+    // Container runtime overrides (Dokploy parity)
+    command: string | null;
+    args: string[];
+    buildArgs: Record<string, string>;
+    restartPolicy: any;
+    updateConfig: any;
+    rollbackConfig: any;
   };
   buildNode: NodeConnectionInfo | null;
   deployNode: NodeConnectionInfo;
@@ -780,6 +788,7 @@ export class DeploymentEngine {
         gitBranch: deployment.service.gitBranch,
         dockerfilePath: deployment.service.dockerfilePath,
         dockerContext: deployment.service.dockerContext,
+        dockerBuildStage: (deployment.service as any).dockerBuildStage || null,
         sourceType: deployment.service.sourceType,
         composeFile: deployment.service.composeFile,
         imageName: deployment.service.imageName,
@@ -794,6 +803,13 @@ export class DeploymentEngine {
         projectId: deployment.service.projectId,
         deployNodeIds: (deployment.service.deployNodeIds as string[]) || [],
         volumes: (deployment.service.volumes as any[]) || [],
+        // Container runtime overrides
+        command: (deployment.service as any).command || null,
+        args: ((deployment.service as any).args as string[]) || [],
+        buildArgs: ((deployment.service as any).buildArgs as Record<string, string>) || {},
+        restartPolicy: (deployment.service as any).restartPolicy || null,
+        updateConfig: (deployment.service as any).updateConfig || null,
+        rollbackConfig: (deployment.service as any).rollbackConfig || null,
       },
       buildNode,
       deployNode,
@@ -913,9 +929,17 @@ export class DeploymentEngine {
       // Dockerfile build (auto-detected or explicitly specified)
       this.log(deploymentId, 'build', `Using Dockerfile: ${dockerfile}`);
 
+      // Build args: env vars as build args (backward compat) + explicit buildArgs from service config
       const buildArgs: string[] = [];
       for (const [key, value] of Object.entries(service.envVars)) {
         buildArgs.push(`--build-arg ${shellEscape(`${key}=${value}`)}`);
+      }
+      // Explicit build args from the service configuration (Dokploy parity)
+      const svcBuildArgs = (service as any).buildArgs as Record<string, string> | undefined;
+      if (svcBuildArgs && typeof svcBuildArgs === 'object') {
+        for (const [key, value] of Object.entries(svcBuildArgs)) {
+          buildArgs.push(`--build-arg ${shellEscape(`${key}=${value}`)}`);
+        }
       }
 
       // Build cache flags — reuse unchanged layers from previous image
@@ -926,6 +950,11 @@ export class DeploymentEngine {
       // Embed cache metadata so the image itself can be a cache source
       cacheFlags.push('--build-arg BUILDKIT_INLINE_CACHE=1');
 
+      // Multi-stage build target (Dokploy parity: dockerBuildStage)
+      const targetFlag = (service as any).dockerBuildStage
+        ? `--target ${shellEscape((service as any).dockerBuildStage)}`
+        : '';
+
       const cmd = [
         buildDir.includes(':') ? `cd /d "${buildDir}" &&` : `cd ${buildDir} &&`,
         'DOCKER_BUILDKIT=1',
@@ -935,10 +964,11 @@ export class DeploymentEngine {
         '--output type=docker',
         `-t ${imageName}`,
         `-f ${dockerfile}`,
+        targetFlag,
         ...cacheFlags,
         ...buildArgs,
         contextPath,
-      ].join(' ');
+      ].filter(Boolean).join(' ');
 
       const result = await sshManager.execStream(sshConfig, cmd, (line) => {
         this.log(deploymentId, 'build', line);
@@ -1215,6 +1245,12 @@ export class DeploymentEngine {
           'click-deploy.deployment-id': deploymentId,
           ...this.buildTraefikLabels(deploymentId, ctx, serviceName),
         },
+        // Container runtime overrides (Dokploy parity)
+        command: ctx.service.command || undefined,
+        args: ctx.service.args.length > 0 ? ctx.service.args : undefined,
+        restartPolicy: ctx.service.restartPolicy || undefined,
+        updateConfig: ctx.service.updateConfig || undefined,
+        rollbackConfig: ctx.service.rollbackConfig || undefined,
       });
     } else {
       // Create new service
@@ -1281,6 +1317,12 @@ export class DeploymentEngine {
           source: `${serviceName}_${v.name}`,
           target: v.mountPath,
         })),
+        // Container runtime overrides (Dokploy parity)
+        command: ctx.service.command || undefined,
+        args: ctx.service.args.length > 0 ? ctx.service.args : undefined,
+        restartPolicy: ctx.service.restartPolicy || undefined,
+        updateConfig: ctx.service.updateConfig || undefined,
+        rollbackConfig: ctx.service.rollbackConfig || undefined,
       });
 
       // Store swarm service reference
