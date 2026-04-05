@@ -40,12 +40,21 @@ export const publicProcedure = t.procedure;
 /**
  * Protected procedure — requires authenticated session.
  * Throws UNAUTHORIZED if no valid session is present.
+ * Throws FORBIDDEN if the user has no organization (setup incomplete).
  */
 export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
   if (!ctx.session) {
     throw new TRPCError({
       code: 'UNAUTHORIZED',
       message: 'You must be logged in to perform this action',
+    });
+  }
+  // Guard against users whose organization setup failed or was bypassed.
+  // organizationId is nullable on the user row — if null, no data should be visible.
+  if (!ctx.session.organizationId) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Your account setup is incomplete. Please contact your administrator.',
     });
   }
   return next({

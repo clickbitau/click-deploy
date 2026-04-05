@@ -3,20 +3,33 @@
 // ============================================================
 // After a user signs up, we need to create their organization
 // and assign them as owner. This runs as a Next.js API route
-// that better-auth's afterSignup hook would call, or we call
-// it manually after signup on the client side.
+// called by the client after better-auth creates the user.
+//
+// SECURITY: The route verifies that the session's userId matches
+// the requested userId. This prevents callers from hijacking
+// another user's account into a different organization.
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server';
 import { db, organizations, users, eq } from '@click-deploy/database';
+import { auth } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { userId, orgName, orgSlug } = body;
+    const { orgName, orgSlug } = body;
 
-    if (!userId || !orgName) {
+    // ── SECURITY: Verify the caller is authenticated ────────
+    // Do NOT accept userId from the request body — always derive
+    // it from the server-side session to prevent account hijacking.
+    const sessionData = await auth.api.getSession({ headers: req.headers });
+    if (!sessionData?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized — no active session' }, { status: 401 });
+    }
+    const userId = sessionData.user.id;
+
+    if (!orgName) {
       return NextResponse.json(
-        { error: 'userId and orgName are required' },
+        { error: 'orgName is required' },
         { status: 400 }
       );
     }
@@ -40,11 +53,17 @@ export async function POST(req: NextRequest) {
     // Create organization
     const slug = orgSlug || orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
+    // Ensure slug is unique by appending a suffix if needed
+    const existingOrg = await db.query.organizations.findFirst({
+      where: eq(organizations.slug, slug),
+    });
+    const finalSlug = existingOrg ? `${slug}-${Date.now().toString(36)}` : slug;
+
     const [org] = await db
       .insert(organizations)
       .values({
         name: orgName,
-        slug,
+        slug: finalSlug,
       })
       .returning();
 
