@@ -81,9 +81,9 @@ export function generateTraefikLabels(
     // Target port (load balancer server port)
     labels[`traefik.http.services.${name}.loadbalancer.server.port`] = String(route.targetPort);
 
-    // Health check via load balancer
-    labels[`traefik.http.services.${name}.loadbalancer.healthcheck.path`] = '/';
-    labels[`traefik.http.services.${name}.loadbalancer.healthcheck.interval`] = '10s';
+    // NOTE: We intentionally do NOT set traefik.http.services.*.loadbalancer.healthcheck.path
+    // because many apps (e.g. Next.js) return 3xx redirects on '/', which Traefik treats as
+    // unhealthy. Traefik uses Docker Swarm's native health state instead.
 
     // HTTP → HTTPS redirect middleware
     if (route.sslEnabled) {

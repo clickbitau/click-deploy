@@ -19,6 +19,7 @@ import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow, format } from 'date-fns';
 import { useState, useEffect, useRef } from 'react';
 import { useConfirm } from '@/components/confirm-dialog';
+import { useRealtimeTable } from '@/lib/use-realtime';
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; class: string; label: string; bg: string }> = {
   running: { icon: CheckCircle2, class: 'text-success-400', bg: 'bg-success-500/10 border-success-500/20', label: 'Running' },
@@ -176,17 +177,24 @@ export default function DeploymentDetailPage() {
   const isActive = (d: any) =>
     d && ['building', 'deploying', 'pending'].includes(d.deployStatus);
 
-  const { data: deployment, isLoading } = trpc.deployment.byId.useQuery(
+  const { data: deployment, isLoading, refetch } = trpc.deployment.byId.useQuery(
     { id: deploymentId },
     {
       retry: 1,
       enabled: !!deploymentId,
+      // Fallback polling during active deployments; Realtime handles instant updates
       refetchInterval: (query) => {
         const d = query.state.data;
-        return isActive(d) ? 2000 : false;
+        return isActive(d) ? 5000 : false;
       },
     }
   );
+
+  // Instant updates via Supabase Realtime broadcast triggers
+  useRealtimeTable({
+    table: 'deployments',
+    onchange: () => refetch(),
+  });
 
   if (isLoading || !deployment) {
     return (

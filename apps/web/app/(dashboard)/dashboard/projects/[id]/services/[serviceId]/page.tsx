@@ -34,6 +34,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { SlideOver, FormField, FormInput, FormSelect } from '@/components/slide-over';
 import { useConfirm } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
+import { useRealtimeTable } from '@/lib/use-realtime';
 
 const deployStatusConfig: Record<string, { icon: typeof CheckCircle2; class: string; dot: string; label: string }> = {
   running: { icon: CheckCircle2, class: 'text-success-400', dot: 'status-running', label: 'Running' },
@@ -61,13 +62,24 @@ export default function ServiceDetailPage() {
     {
       retry: 1,
       enabled: !!serviceId,
-      refetchInterval: hasActiveDeployment ? 2000 : false,
+      // Fallback polling only during active deployments; Realtime handles instant updates
+      refetchInterval: hasActiveDeployment ? 5000 : false,
     }
   );
   const { data: domains, refetch: refetchDomains } = trpc.domain.listByService.useQuery(
     { serviceId },
     { retry: 1, enabled: !!serviceId }
   );
+
+  // ── Realtime: instant updates via Supabase broadcast triggers ──
+  useRealtimeTable({
+    table: 'deployments',
+    onchange: () => refetchDeploys(),
+  });
+  useRealtimeTable({
+    table: 'services',
+    onchange: () => refetch(),
+  });
 
   // Track whether any deployment is active to control polling
   useEffect(() => {

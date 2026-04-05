@@ -24,6 +24,7 @@ import { SlideOver, FormField, FormSelect } from '@/components/slide-over';
 import { EmptyState } from '@/components/empty-state';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import { useRealtimeTable } from '@/lib/use-realtime';
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; class: string; bg: string; label: string }> = {
   running: { icon: CheckCircle2, class: 'text-success-400', bg: 'bg-success-500/10 text-success-400', label: 'Running' },
@@ -61,6 +62,12 @@ export default function DeploymentsPage() {
   const deployments = data?.items;
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  // Instant updates via Supabase Realtime (fallback polling above handles edge cases)
+  useRealtimeTable({
+    table: 'deployments',
+    onchange: () => refetch(),
+  });
 
   const [showTrigger, setShowTrigger] = useState(false);
   const rollback = trpc.deployment.rollback.useMutation();
