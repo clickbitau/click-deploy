@@ -140,6 +140,7 @@ export default function DashboardLayout({
             <NotificationBell />
           </div>
           <UserCard />
+          {/* HA-v2 */}
         </div>
       </aside>
 
